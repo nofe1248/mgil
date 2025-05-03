@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <format>
 #include <iterator>
+#include <mdspan>
 #include <numeric>
 #include <ostream>
 #include <ranges>
@@ -551,6 +552,11 @@ namespace mgil::details {
     template<typename T>
     concept IsArithmetic = std::is_arithmetic_v<T>;
 
+    template<typename OutPtr, typename In>
+    constexpr auto ptr_reinterpret_cast(In *ptr) -> OutPtr {
+        return static_cast<OutPtr>(static_cast<void *>(ptr));
+    }
+
     // Helper classes and concepts
     template<class Reference>
     struct arrow_proxy {
@@ -740,7 +746,8 @@ struct std::iterator_traits<It> {
 };
 
 namespace mgil::details {
-    template<typename Loc, typename XIt, typename YIt, template <typename> class PointType>
+    template<typename Loc, typename XIt, typename YIt, typename PointType>
+        requires std::same_as<typename PointType::value_type, typename std::iterator_traits<XIt>::difference_type>
     class position_locator_base {
     public:
         using x_iterator = XIt;
@@ -749,19 +756,99 @@ namespace mgil::details {
         using value_type = typename std::iterator_traits<x_iterator>::value_type;
         using reference = typename std::iterator_traits<x_iterator>::reference;
         using coordinate_type = typename std::iterator_traits<x_iterator>::difference_type;
-        using difference_type = PointType<coordinate_type>;
-        using point_type = PointType<coordinate_type>;
+        using difference_type = PointType;
+        using point_type = PointType;
         using x_coordinate_type = coordinate_type;
         using y_coordinate_type = coordinate_type;
 
     private:
-        auto self() -> Loc & { return static_cast<Loc &>(*this); }
-        auto self() const -> Loc const & { return static_cast<Loc const &>(*this); }
+        constexpr auto self() -> Loc & {
+            return static_cast<Loc &>(*this);
+        }
+        constexpr auto self() const -> Loc const & {
+            return static_cast<Loc const &>(*this);
+        }
 
     public:
+        constexpr auto operator==(Loc const &that) const -> bool {
+            return self() == that;
+        }
+        constexpr auto operator!=(Loc const &that) const -> bool {
+            return not(self() == that);
+        }
 
+        constexpr auto xAt(x_coordinate_type dx, y_coordinate_type dy) const -> x_iterator {
+            Loc temp = self();
+            temp += point_type(dx, dy);
+            return temp.x();
+        }
+        constexpr auto xAt(difference_type d) const -> x_iterator {
+            Loc temp = self();
+            temp += d;
+            return temp.x();
+        }
+        constexpr auto yAt(x_coordinate_type dx, y_coordinate_type dy) const -> x_iterator {
+            Loc temp = self();
+            temp += point_type(dx, dy);
+            return temp.y();
+        }
+        constexpr auto yAt(difference_type d) const -> x_iterator {
+            Loc temp = self();
+            temp += d;
+            return temp.y();
+        }
+        constexpr auto xyAt(x_coordinate_type dx, y_coordinate_type dy) const -> Loc {
+            Loc temp = self();
+            temp += point_type(dx, dy);
+            return temp;
+        }
+        constexpr auto xyAt(difference_type d) const -> Loc {
+            Loc temp = self();
+            temp += d;
+            return temp;
+        }
+
+        constexpr auto operator()(x_coordinate_type dx, y_coordinate_type dy) const -> reference {
+            return *xAt(dx, dy);
+        }
+        constexpr auto operator[](difference_type const &d) const -> reference {
+            return *xAt(d.x(), d.y());
+        }
+
+        constexpr auto operator*() const -> reference {
+            return *self().x();
+        }
+
+        constexpr auto operator+=(difference_type const &d) -> Loc & {
+            self().x() += d.x();
+            self().y() += d.y();
+            return self();
+        }
+        constexpr auto operator-=(difference_type const &d) const -> Loc & {
+            self().x() -= d.x();
+            self().y() -= d.y();
+            return self();
+        }
+
+        constexpr auto operator+(difference_type const &d) const -> Loc {
+            return xyAt(d);
+        }
+        constexpr auto operator-(difference_type const &d) const -> Loc {
+            return xyAt(-d);
+        }
+
+        using cached_location_type = difference_type;
+        constexpr auto cacheLocation(difference_type const &d) const -> cached_location_type {
+            return d;
+        }
+        constexpr auto cacheLocation(x_coordinate_type x, y_coordinate_type y) const -> cached_location_type {
+            return difference_type(x, y);
+        }
+
+        template<typename Deref, bool IsTransposed, typename PointType_>
+        friend class position_locator;
     };
-}
+} // namespace mgil::details
 
 // Traits
 namespace mgil::inline traits {
@@ -965,10 +1052,15 @@ namespace mgil::inline concepts {
     // Iterator concepts
     // Models a random-access iterator over pixels
     template<typename It>
-    concept IsPixelIterator = std::random_access_iterator<It> and IsPixel<std::iter_value_t<It>> and requires {
-        typename PixelIteratorTraits<It>::const_iterator_type;
-        { PixelIteratorTraits<It>::is_mutable } -> std::convertible_to<bool>;
-    };
+    concept IsPixelIterator =
+            std::random_access_iterator<It> and IsPixel<std::iter_value_t<It>> and requires(It it, It const cit) {
+                typename PixelIteratorTraits<It>::const_iterator_type;
+                { PixelIteratorTraits<It>::is_mutable } -> std::convertible_to<bool>;
+                { it.width() } -> std::convertible_to<std::size_t &>;
+                { it.height() } -> std::convertible_to<std::size_t &>;
+                { cit.width() } -> std::convertible_to<std::size_t const &>;
+                { cit.height() } -> std::convertible_to<std::size_t const &>;
+            };
 
     // Encapsulates on-th-fly pixel transformation
     template<typename T>
@@ -1048,9 +1140,12 @@ namespace mgil::inline concepts {
                                         { it.advancedRef(diff) } -> std::same_as<typename It::reference>;
                                     };
 
+    template<typename It>
+    concept IsPixelIteratorHasTransposedType = IsPixelIterator<It> and requires { typename It::transposed_type; };
+
     // Pixel locator concepts
     template<typename Loc>
-    concept Is2DLocator = std::regular<Loc> and requires(Loc loc, Loc loc2) {
+    concept Is2DLocator = std::regular<Loc> and requires(Loc loc, Loc loc2, Loc const cloc) {
         typename Loc::value_type;
         typename Loc::reference;
         typename Loc::difference_type;
@@ -1063,7 +1158,7 @@ namespace mgil::inline concepts {
         typename Loc::x_coordinate_type;
         typename Loc::y_coordinate_type;
 
-        { Loc::is_mutable } -> std::same_as<bool>;
+        { Loc::is_mutable } -> std::convertible_to<bool>;
 
         { loc += std::declval<typename Loc::difference_type>() } -> std::convertible_to<Loc &>;
         { loc -= std::declval<typename Loc::difference_type>() } -> std::convertible_to<Loc &>;
@@ -1072,7 +1167,7 @@ namespace mgil::inline concepts {
         { *loc } -> std::convertible_to<typename Loc::reference>;
         { loc[std::declval<typename Loc::difference_type>()] } -> std::convertible_to<typename Loc::reference>;
         {
-            Loc::cacheLocation(std::declval<typename Loc::difference_type>())
+            loc.cacheLocation(std::declval<typename Loc::difference_type>())
         } -> std::convertible_to<typename Loc::cached_location_type>;
         { loc[std::declval<typename Loc::cached_location_type>()] } -> std::convertible_to<typename Loc::reference>;
 
@@ -1094,14 +1189,19 @@ namespace mgil::inline concepts {
             loc(std::declval<typename Loc::x_coordinate_type>(), std::declval<typename Loc::y_coordinate_type>())
         } -> std::convertible_to<typename Loc::reference>;
         {
-            loc.cache_location(std::declval<typename Loc::x_coordinate_type>(),
-                               std::declval<typename Loc::y_coordinate_type>())
-        } -> std::convertible_to<typename Loc::cache_location_type>;
+            loc.cacheLocation(std::declval<typename Loc::x_coordinate_type>(),
+                              std::declval<typename Loc::y_coordinate_type>())
+        } -> std::convertible_to<typename Loc::cached_location_type>;
 
         { loc.is1DTraversable(std::declval<typename Loc::x_coordinate_type>()) } -> std::convertible_to<bool>;
         {
             loc.yDistanceTo(loc2, std::declval<typename Loc::x_coordinate_type>())
         } -> std::convertible_to<typename Loc::y_coordinate_type>;
+
+        { loc.width() } -> std::convertible_to<std::size_t &>;
+        { loc.height() } -> std::convertible_to<std::size_t &>;
+        { cloc.width() } -> std::convertible_to<std::size_t const &>;
+        { cloc.height() } -> std::convertible_to<std::size_t const &>;
     };
 
     template<typename Loc>
@@ -1774,30 +1874,56 @@ namespace mgil {
 namespace mgil {
     // An iterator that remembers its current X and Y position and invokes a function object with it upon dereferencing.
     // Conforms to IsPixelIterator and IsStepIterator concepts
-    template<typename Deref, typename PointType = Point<int>>
+    template<typename Deref, bool IsTransposed = false, typename PointType = Point<std::ptrdiff_t>>
         requires IsPoint<PointType> and IsPixelDereferenceAdaptor<Deref>
     struct position_iterator : pixel_iterator_tag, details::iterator_facade<position_iterator<Deref>> {
+    public:
+        using const_iterator_type = position_iterator const;
+        using value_type = typename Deref::value_type;
+        using difference_type = std::ptrdiff_t;
+        using point_type = PointType;
+        using deref_type = Deref;
+        using transposed_type = position_iterator<Deref, not IsTransposed, PointType>;
+
+        static constexpr bool is_mutable = true;
+        static constexpr bool transposed = IsTransposed;
+
     private:
         PointType pos_ = {};
         PointType step_ = {};
         Deref deref_ = {};
+        std::size_t width_ = 0;
+        std::size_t height_ = 0;
+        std::mdspan<value_type, std::dextents<std::size_t, 2>> underlying_;
 
     public:
-        using const_iterator_type = position_iterator const;
-        using value_type = typename Deref::value_type;
-        using difference_type = std::int64_t;
-        using point_type = PointType;
-        static constexpr bool is_mutable = false;
+        template<typename NewDeref>
+            requires IsPixelDereferenceAdaptor<NewDeref>
+        struct add_deref {
+            using type = position_iterator<deref_compose<NewDeref, Deref>, IsTransposed, PointType>;
 
-        constexpr position_iterator() = default;
+            static constexpr auto make(position_iterator const &it, NewDeref const &new_deref) -> type {
+                return type(it.pos(), it.step(), deref_compose<NewDeref, Deref>{});
+            }
+        };
+
+        explicit constexpr position_iterator(PointType const &pos = {0, 0}, PointType const &step = {1, 1},
+                                             Deref const &deref = {}, std::size_t const width = 0,
+                                             std::size_t const height = 0, value_type *storage = nullptr) :
+            pos_{pos}, step_{step}, deref_{deref}, width_{width}, height_{height}, underlying_{storage, width, height} {
+        }
         constexpr position_iterator(position_iterator const &that) :
-            pos_{that.pos_}, step_{that.step_}, deref_{that.deref_} {
+            pos_{that.pos_}, step_{that.step_}, deref_{that.deref_}, width_{that.width_}, height_{that.height_},
+            underlying_{that.underlying_} {
         }
 
         constexpr auto operator=(position_iterator const &that) -> position_iterator & {
             pos_ = that.pos_;
             step_ = that.step_;
             deref_ = that.deref_;
+            width_ = that.width_;
+            height_ = that.height_;
+            underlying_ = that.underlying_;
             return *this;
         }
 
@@ -1807,8 +1933,8 @@ namespace mgil {
         constexpr auto step() const -> PointType const & {
             return step_;
         }
-        static_assert(std::invocable<Deref, difference_type>,
-                      "The dereference function object must accept a difference_type as the only input");
+        static_assert(std::invocable<Deref, difference_type, value_type>,
+                      "The dereference function object must accept a difference_type and a pixel as the input");
         constexpr auto derefFn() const {
             return deref_;
         }
@@ -1818,7 +1944,7 @@ namespace mgil {
         }
 
         constexpr auto dereference() const {
-            return deref_(pos_);
+            return deref_(pos_, underlying_[pos_.x(), pos_.y()]);
         }
         constexpr auto increment() -> void {
             pos_ += step_;
@@ -1832,19 +1958,37 @@ namespace mgil {
         constexpr auto distance_to(position_iterator const &that) const -> difference_type {
             return ((that.pos_ - this->pos_) / step_).x();
         }
+        constexpr auto equal_to(position_iterator const &that) const -> bool {
+            return pos_ == that.pos_ and step_ == that.step_ and deref_ == that.deref_ and width_ == that.width_ and
+                   height_ == that.height_ and underlying_ == that.underlying_;
+        }
+
+        constexpr auto width() -> std::size_t & {
+            return width_;
+        }
+        constexpr auto height() -> std::size_t & {
+            return height_;
+        }
+        [[nodiscard]] constexpr auto width() const -> std::size_t const & {
+            return width_;
+        }
+        [[nodiscard]] constexpr auto height() const -> std::size_t const & {
+            return height_;
+        }
     };
 
 #ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
     struct test_deref_adaptor
         : deref_base<test_deref_adaptor, Pixel<int, gray_layout_t>, Pixel<int, gray_layout_t> const,
-                     Pixel<int, gray_layout_t> const &, Point<int>, Pixel<int, gray_layout_t>, false> {
-        constexpr auto operator()(Point<int> point) const -> Pixel<int, gray_layout_t> {
+                     Pixel<int, gray_layout_t> const &, Point<std::ptrdiff_t>, Pixel<int, gray_layout_t>, false> {
+        constexpr auto operator()(Point<std::ptrdiff_t> point, Pixel<int, gray_layout_t> pixel) const -> Pixel<int, gray_layout_t> {
             return Pixel<int, gray_layout_t>(point.x() + point.y());
         }
         constexpr auto operator=(test_deref_adaptor const &that) -> test_deref_adaptor & = default;
     };
     static_assert(IsPixelIterator<position_iterator<test_deref_adaptor>>);
     static_assert(IsStepIterator<position_iterator<test_deref_adaptor>>);
+    static_assert(IsPixelIteratorHasTransposedType<position_iterator<test_deref_adaptor>>);
 #endif
 } // namespace mgil
 
@@ -1853,13 +1997,135 @@ namespace mgil {
     // A 2D locator over a virtual image
     // Invokes a given function object passing its coordinates upon dereferencing
     // Conforms to IsPixelLocator, IsPixelLocatorHasTransposedType concepts
-    template<typename Deref, bool IsTransposed, typename PointType = Point<int>>
+    template<typename Deref, bool IsTransposed = false, typename PointType = Point<std::ptrdiff_t>>
         requires IsPixelDereferenceAdaptor<Deref> and IsPoint<PointType>
-    class position_locator {};
+    class position_locator
+        : public details::position_locator_base<position_locator<Deref, IsTransposed, PointType>,
+                                                position_iterator<Deref, IsTransposed, PointType>,
+                                                position_iterator<Deref, IsTransposed, PointType>, PointType> {
+    public:
+        using parent_type =
+                details::position_locator_base<position_locator<Deref, IsTransposed, PointType>,
+                                               position_iterator<Deref, IsTransposed, PointType>,
+                                               position_iterator<Deref, IsTransposed, PointType>, PointType>;
+        using deref_type = Deref;
+        using const_locator = position_locator<typename Deref::const_adaptor, IsTransposed, PointType>;
+        using point_type = typename parent_type::point_type;
+        using coordinate_type = typename parent_type::coordinate_type;
+        using x_coordinate_type = typename parent_type::x_coordinate_type;
+        using y_coordinate_type = typename parent_type::y_coordinate_type;
+        using x_iterator = typename parent_type::x_iterator;
+        using y_iterator = typename parent_type::y_iterator;
+        using transposed_type = position_locator<Deref, not IsTransposed, PointType>;
+
+        static constexpr bool is_transposed = IsTransposed;
+        static constexpr bool is_mutable = true;
+
+        template<typename NewDeref>
+            requires IsPixelDereferenceAdaptor<NewDeref>
+        struct add_deref {
+            using type = position_locator<deref_compose<NewDeref, Deref>, IsTransposed, PointType>;
+
+            static constexpr auto make(position_locator const &it, NewDeref const &new_deref) -> type {
+                return type(it.pos(), it.step(), deref_compose<NewDeref, Deref>{});
+            }
+        };
+
+        explicit constexpr position_locator(point_type const &pos = {0, 0}, point_type const &step = {1, 1},
+                                            Deref const &deref = {}) : y_pos_(pos, step, deref) {
+        }
+        constexpr position_locator(position_locator const &that) : y_pos_(that.y_pos_) {
+        }
+        constexpr auto operator=(position_locator const &that) -> position_locator & = default;
+
+        template<typename Deref_, bool Transposed_, typename PointType_>
+        explicit constexpr position_locator(position_locator<Deref_, Transposed_, PointType_> const &that) :
+            y_pos_(that.y_pos_) {
+        }
+        template<typename Deref_, bool Transposed_, typename PointType_>
+        explicit constexpr position_locator(position_locator<Deref_, Transposed_, PointType_> const &that,
+                                            coordinate_type y_step) :
+            y_pos_(that.pos(), point_type(that.step().x(), that.step().y() * y_step), that.deref()) {
+        }
+        template<typename Deref_, bool Transposed_, typename PointType_>
+        explicit constexpr position_locator(position_locator<Deref_, Transposed_, PointType_> const &that,
+                                            coordinate_type x_step, coordinate_type y_step, bool transpose = false) :
+            y_pos_(that.pos(),
+                   transpose ? point_type(that.step().x() * y_step, that.step.y() * x_step)
+                             : point_type(that.step().x() * x_step, that.step.y() * y_step),
+                   that.deref()) {
+        }
+
+        constexpr auto operator==(position_locator const &that) const -> bool {
+            return y_pos_ == that.y_pos_;
+        }
+
+        constexpr auto x() -> x_iterator & {
+            return *details::ptr_reinterpret_cast<x_iterator *>(this);
+        }
+        constexpr auto x() const -> x_iterator const & {
+            return *details::ptr_reinterpret_cast<x_iterator const *>(this);
+        }
+        constexpr auto y() -> y_iterator & {
+            return y_pos_;
+        }
+        constexpr auto y() const -> y_iterator const & {
+            return y_pos_;
+        }
+
+        constexpr auto pos() const -> point_type const & {
+            return y_pos_.pos();
+        }
+        constexpr auto step() const -> point_type const & {
+            return y_pos_.step();
+        }
+        constexpr auto deref() const -> deref_type const & {
+            return y_pos_.deref();
+        }
+
+        constexpr auto width() -> std::size_t & {
+            return y_pos_.width();
+        }
+        constexpr auto height() -> std::size_t & {
+            return y_pos_.height();
+        }
+        [[nodiscard]] constexpr auto width() const -> std::size_t const & {
+            return y_pos_.width();
+        }
+        [[nodiscard]] constexpr auto height() const -> std::size_t const & {
+            return y_pos_.height();
+        }
+
+        constexpr auto is1DTraversable(x_coordinate_type) const -> bool {
+            return false;
+        }
+
+        constexpr auto yDistanceTo(position_locator const &that, x_coordinate_type) const -> y_coordinate_type {
+            if constexpr (IsTransposed) {
+                return (that.pos().y() - pos().y()) / step().y();
+            }
+            return (that.pos().x() - pos().x()) / step().x();
+        }
+
+    private:
+        y_iterator y_pos_;
+    };
+
+#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+    static_assert(IsPixelLocator<position_locator<test_deref_adaptor>>);
+    static_assert(IsPixelLocatorHasTransposedType<position_locator<test_deref_adaptor>>);
+#endif
 } // namespace mgil
 
 // Image container
-namespace mgil {}
+namespace mgil {
+    // An owning container of image consists of a two-dimensional map of pixels
+    // Has deep copying semantics, may cause massive performance regression when being abused
+    // Always prefer non-owning image views instead of image containers.
+    template<typename Pixel, typename Alloc = std::allocator<Pixel>>
+        requires IsPixel<Pixel>
+    class Image {};
+} // namespace mgil
 
 // Image factories, views, and algorithms
 namespace mgil {}
