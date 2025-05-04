@@ -1,10 +1,13 @@
 #include "mgil.hpp"
 
-#include <iostream>
 #include <print>
+#include <vector>
 
 auto main() -> int {
-    mgil::Pixel<mgil::Double_01, mgil::rgba_layout_t> const pixel(0.1, 0.2, 0.3, 0.4);
-    std::cout << pixel << std::endl;
-    std::println("{}", pixel);
+    using namespace mgil;
+    auto view = gradient(12, 12, Pixel<int, rgb_layout_t>(0, 0, 0), Pixel<int, rgb_layout_t>(1, 2, 0),
+                         Pixel<int, rgb_layout_t>(0, 0, 3));
+    std::println("{}", view);
+    auto subsampled = nearest(view, 16, 16);
+    std::println("{}", subsampled);
 }
