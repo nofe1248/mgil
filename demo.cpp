@@ -8,6 +8,7 @@ auto main() -> int {
     auto view = gradient(12, 12, Pixel<int, rgb_layout_t>(0, 0, 0), Pixel<int, rgb_layout_t>(1, 2, 0),
                          Pixel<int, rgb_layout_t>(0, 0, 3));
     std::println("{}", view);
-    auto subsampled = nearest(view, 16, 16);
-    std::println("{}", subsampled);
+    Image<Pixel<int, rgb_layout_t>> image(view);
+    auto image_view = image.toView();
+    std::println("{}", image_view);
 }

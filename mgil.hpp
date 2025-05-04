@@ -1084,7 +1084,12 @@ namespace mgil::inline concepts {
                 { cit.height() } -> std::convertible_to<typename PixelIteratorTraits<It>::y_coordinate_type const &>;
             };
 
-    struct identity_deref_adaptor {};
+    template<typename Pixel>
+        requires IsPixel<Pixel>
+    struct identity_deref_adaptor {
+        using value_type = Pixel;
+        using const_adaptor = identity_deref_adaptor;
+    };
     // Encapsulates on-th-fly pixel transformation
     template<typename T>
     concept IsPixelDereferenceAdaptor = std::default_initializable<T> and requires(T t) {
@@ -1099,7 +1104,7 @@ namespace mgil::inline concepts {
         requires IsPixel<std::remove_cvref_t<typename T::const_reference>>;
 
         { T::is_mutable } -> std::convertible_to<bool>;
-    } or std::same_as<T, identity_deref_adaptor>;
+    } or details::is_specialization_of_v<T, identity_deref_adaptor>;
     template<typename ConstT, typename Value, typename Reference, typename ConstReference, typename ResultType,
              bool IsMutable>
     struct deref_base {
@@ -2250,7 +2255,7 @@ namespace mgil {
 namespace mgil {
     // An iterator that remembers its current X and Y position and invokes a function object with it upon dereferencing.
     // Conforms to IsPixelIterator and IsStepIterator concepts
-    template<typename Deref = identity_deref_adaptor, bool IsTransposed = false, bool IsVirtual = true,
+    template<typename Deref = identity_deref_adaptor<Pixel<int, gray_layout_t>>, bool IsTransposed = false, bool IsVirtual = true,
              typename PointType = Point<std::ptrdiff_t>>
         requires IsPoint<PointType> and IsPixelDereferenceAdaptor<Deref>
     struct position_iterator : pixel_iterator_tag,
@@ -2332,7 +2337,7 @@ namespace mgil {
         }
 
         constexpr auto dereference() const {
-            if constexpr (std::same_as<deref_type, identity_deref_adaptor>) {
+            if constexpr (details::is_specialization_of_v<deref_type, identity_deref_adaptor>) {
                 return underlying_[pos_.x(), pos_.y()];
             } else {
                 if constexpr (IsVirtual) {
@@ -2555,10 +2560,11 @@ namespace mgil {
             }
         };
 
-        constexpr position_locator() : y_pos_(point_type{0, 0}, point_type{1, 1}, Deref{}) {
-        }
-        explicit constexpr position_locator(point_type const &pos, point_type const &step, Deref const &deref) :
-            y_pos_(pos, step, deref) {
+        explicit constexpr position_locator(PointType const &pos = {0, 0}, PointType const &step = {1, 1},
+                                            Deref const &deref = {}, x_coordinate_type const width = 0,
+                                            y_coordinate_type const height = 0,
+                                            typename parent_type::value_type *storage = nullptr) :
+            y_pos_(pos, step, deref, width, height, storage) {
         }
         constexpr position_locator(position_locator const &that) : y_pos_(that.y_pos_) {
         }
@@ -3544,9 +3550,6 @@ namespace mgil {
     }
 } // namespace mgil
 
-// Image processing algorithms
-namespace mgil {}
-
 // Image container
 namespace mgil {
     // An owning container of image consists of a two-dimensional map of pixels
@@ -3557,7 +3560,149 @@ namespace mgil {
     class Image {
     public:
         using allocator_type = typename std::allocator_traits<Alloc>::template rebind_alloc<Pixel>;
+        using locator = position_locator<identity_deref_adaptor<Pixel>, false, false>;
+        using view_type = ImageView<locator>;
+        using const_view_type = ImageView<typename locator::const_locator>;
+        using point_type = typename view_type::point_type;
+        using value_type = typename view_type::value_type;
+        using x_coordinate_type = typename view_type::x_coordinate_type;
+        using y_coordinate_type = typename view_type::y_coordinate_type;
+
+    private:
+        allocator_type allocator_;
+        Pixel *data_;
+        x_coordinate_type width_;
+        y_coordinate_type height_;
+        std::mdspan<Pixel, std::dextents<std::size_t, 2>> interface_;
+
+        constexpr auto deallocate() -> void {
+            if (data_ != nullptr) {
+                allocator_.deallocate(data_);
+            }
+        }
+
+    public:
+        constexpr Image() : allocator_(), data_(nullptr), width_(), height_(), interface_(data_, width_, height_) {
+        }
+        // Deep copy
+        constexpr Image(Image const &that) : allocator_(), width_(that.width_), height_(that.height_) {
+            data_ = allocator_.allocate(width_ * height_);
+            std::ranges::copy(that.data_, data_);
+            interface_ = std::mdspan<Pixel, std::dextents<std::size_t, 2>>{data_, width_, height_};
+        }
+        // Shallow copy
+        constexpr Image(Image &&that) noexcept :
+            allocator_(), data_(std::move(that.data_)), width_(that.width_), height_(that.height_),
+            interface_(std::move(that.interface_)) {
+            that.data_ = nullptr;
+        }
+        constexpr auto operator=(Image const &that) -> Image & {
+            if (this == std::addressof(that)) {
+                return *this;
+            }
+            deallocate();
+            width_ = that.width_;
+            height_ = that.height_;
+            data_ = allocator_.allocate(width_ * height_);
+            std::ranges::copy(that.data_, data_);
+            interface_ = std::mdspan<Pixel, std::dextents<std::size_t, 2>>{data_, width_, height_};
+            return *this;
+        }
+        constexpr auto operator=(Image &&that) noexcept -> Image & {
+            if (this == std::addressof(that)) {
+                return *this;
+            }
+            deallocate();
+            data_ = that.data_;
+            width_ = that.width_;
+            height_ = that.height_;
+            interface_ = std::move(that.interface_);
+            that.data_ = nullptr;
+            return *this;
+        }
+
+        constexpr Image(x_coordinate_type width, y_coordinate_type height, Pixel const &initial = {},
+                        allocator_type const alloc = {}) : allocator_(alloc), width_(width), height_(height) {
+            data_ = allocator_.allocate(width_ * height_);
+            for (std::size_t i = 0; i < width_ * height_; ++i) {
+                data_[i] = initial;
+            }
+            interface_ = std::mdspan<Pixel, std::dextents<std::size_t, 2>>{data_, width_, height_};
+        }
+        template<typename Pixel_, typename Alloc_>
+            requires IsPixelsCompatible<Pixel_, Pixel>
+        explicit constexpr Image(Image<Pixel_, Alloc_> const &that) : width_(that.width_), height_(that.height_) {
+            data_ = allocator_.allocate(width_ * height_);
+            for (std::size_t i = 0; i < width_ * height_; ++i) {
+                data_[i] = Pixel{that.data_[i]};
+            }
+            interface_ = std::mdspan<Pixel, std::dextents<std::size_t, 2>>{data_, width_, height_};
+        }
+        template<typename Pixel_, typename Alloc_>
+            requires IsPixelsCompatible<Pixel_, Pixel>
+        constexpr auto operator=(Image<Pixel_, Alloc_> const &that) -> Image & {
+            if (this == std::addressof(that)) {
+                return *this;
+            }
+            deallocate();
+            width_ = that.width_;
+            height_ = that.height_;
+            data_ = allocator_.allocate(width_ * height_);
+            for (std::size_t i = 0; i < width_ * height_; ++i) {
+                data_[i] = Pixel{that.data_[i]};
+            }
+            interface_ = std::mdspan<Pixel, std::dextents<std::size_t, 2>>{data_, width_, height_};
+            return *this;
+        }
+
+        template<typename View>
+            requires IsImageView<std::remove_cvref_t<View>>
+        explicit constexpr Image(View &&view) :
+            width_(std::forward<View>(view).width()), height_(std::forward<View>(view).height()) {
+            data_ = allocator_.allocate(width_ * height_);
+            interface_ = std::mdspan<Pixel, std::dextents<std::size_t, 2>>{data_, width_, height_};
+            for (std::size_t x = 0; x < width_; ++x) {
+                for (std::size_t y = 0; y < height_; ++y) {
+                    interface_[x, y] = std::forward<View>(view)(x, y);
+                }
+            }
+        }
+        template<typename View>
+            requires IsImageView<std::remove_cvref_t<View>>
+        constexpr auto operator=(View &&view) -> Image & {
+            deallocate();
+            width_ = std::forward<View>(view).width();
+            height_ = std::forward<View>(view).height();
+            data_ = allocator_.allocate(width_ * height_);
+            interface_ = std::mdspan<Pixel, std::dextents<std::size_t, 2>>{data_, width_, height_};
+            for (std::size_t x = 0; x < width_; ++x) {
+                for (std::size_t y = 0; y < height_; ++y) {
+                    interface_[x, y] = std::forward<View>(view)(x, y);
+                }
+            }
+            return *this;
+        }
+
+        constexpr auto operator[](x_coordinate_type x, y_coordinate_type y) const -> Pixel const & {
+            return interface_[x, y];
+        }
+        constexpr auto operator[](x_coordinate_type x, y_coordinate_type y) -> Pixel & {
+            return interface_[x, y];
+        }
+        constexpr auto operator[](point_type const &pos) const -> Pixel const & {
+            return interface_[pos.x(), pos.y()];
+        }
+        constexpr auto operator[](point_type const &pos) -> Pixel & {
+            return interface_[pos.x(), pos.y()];
+        }
+
+        [[nodiscard]] constexpr auto toView() const -> view_type {
+            return view_type(width_, height_, locator({0, 0}, {1, 1}, {}, width_, height_, data_));
+        }
     };
 } // namespace mgil
+
+// Image processing algorithms
+namespace mgil {}
 
 #endif // MGIL_H
