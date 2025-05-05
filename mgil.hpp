@@ -3139,9 +3139,6 @@ namespace mgil {
     };
 
     template<typename Pixel>
-    inline constexpr IdenticalView<Pixel> Identical;
-
-    template<typename Pixel>
         requires IsPixel<Pixel>
     constexpr auto identical(std::ptrdiff_t width, std::ptrdiff_t height, Pixel const &pixel) {
         return IdenticalView<Pixel>{}(width, height, pixel);
@@ -3171,9 +3168,6 @@ namespace mgil {
                     locator({0, 0}, {1, 1}, GradientDeref{.start = start, .step_x = step_x, .step_y = step_y}));
         }
     };
-
-    template<typename Pixel>
-    inline constexpr GradientView<Pixel> Gradient;
 
     template<typename Pixel>
         requires IsPixel<Pixel>
