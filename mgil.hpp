@@ -17,6 +17,8 @@
 #include <compare>
 #include <concepts>
 #include <cstdint>
+#include <expected>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <iterator>
@@ -391,7 +393,7 @@ namespace mgil::details {
     template<typename T, template<typename...> class Templ>
     constexpr bool is_specialization_of_v = is_specialization_of<T, Templ>::value;
 
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(is_specialization_of_nttp_v<index_list<1, 2, 3>, index_list>);
     static_assert(is_specialization_of_v<std::vector<int>, std::vector>);
 #endif
@@ -476,7 +478,7 @@ namespace mgil::details {
     template<typename TypeList, typename IndexList>
     using rearrange_type_list_t = typename rearrange_type_list<TypeList, IndexList>::type;
 
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(std::same_as<type_list<int, float, char>,
                                rearrange_type_list_t<type_list<float, char, int>, index_list<2, 0, 1>>>);
 #endif
@@ -908,10 +910,10 @@ namespace mgil::inline traits {
         using const_pointer = typename T::const_pointer;
         static constexpr bool is_mutable = T::is_mutable;
         static constexpr auto minValue() -> value_type {
-            return typename T::minValue();
+            return T::minValue();
         }
         static constexpr auto maxValue() -> value_type {
-            return typename T::maxValue();
+            return T::maxValue();
         }
         static constexpr auto setValue(T &t, value_type v) -> void {
             t.setValue(v);
@@ -984,7 +986,7 @@ namespace mgil::inline concepts {
         { ChannelTraits<T>::getValue(t) } -> std::convertible_to<typename ChannelTraits<T>::value_type>;
     };
 
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(IsChannel<int>);
     static_assert(IsChannel<float>);
     static_assert(IsChannel<double>);
@@ -1411,7 +1413,7 @@ namespace mgil {
     using argb_layout_t = ColorSpaceLayout<rgba_t, details::index_list<3, 0, 1, 2>>;
     using cmyk_layout_t = ColorSpaceLayout<cmyk_t, details::index_list<0, 1, 2, 3>>;
 
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(IsColorSpace<gray_t> && IsColorSpace<rgb_t> and IsColorSpace<rgba_t> and IsColorSpace<cmyk_t>);
     static_assert(std::same_as<details::type_list<gray_color_t>, gray_layout_t::mapped_color_space>);
     static_assert(std::same_as<details::type_list<red_color_t, green_color_t, blue_color_t>,
@@ -1446,7 +1448,27 @@ namespace mgil {
         static constexpr bool is_mutable = true;
         constexpr RescopedChannel() : value(Min) {
         }
-        constexpr RescopedChannel(T value) : value(value) {
+        constexpr RescopedChannel(RescopedChannel const &that) = default;
+        constexpr RescopedChannel(RescopedChannel &&that) noexcept = default;
+        constexpr auto operator=(RescopedChannel const &that) -> RescopedChannel & = default;
+        constexpr auto operator=(RescopedChannel &&that) noexcept -> RescopedChannel & = default;
+        explicit constexpr RescopedChannel(T value_) : value(value_) {
+            if (value < Min) {
+                value = Min;
+            }
+            if (value > Max) {
+                value = Max;
+            }
+        }
+        template<typename U>
+            requires std::convertible_to<U, T>
+        explicit constexpr RescopedChannel(U value_) : value(static_cast<T>(value_)) {
+            if (value < Min) {
+                value = Min;
+            }
+            if (value > Max) {
+                value = Max;
+            }
         }
         static constexpr auto minValue() -> value_type {
             return Min;
@@ -1460,19 +1482,170 @@ namespace mgil {
         constexpr auto setValue(value_type v) -> void {
             value = v;
         }
-        friend auto operator<=>(RescopedChannel const &lhs, RescopedChannel const &rhs) -> std::strong_ordering {
-            return lhs.value <=> rhs.value;
+
+        template<typename U>
+            requires std::convertible_to<U, value_type>
+        constexpr auto operator=(U const &that) -> RescopedChannel & {
+            value = static_cast<value_type>(that);
+            if (value > Max) {
+                value = Max;
+            }
+            if (value < Min) {
+                value = Min;
+            }
+            return *this;
         }
-        friend auto operator==(RescopedChannel const &lhs, RescopedChannel const &rhs) -> bool {
-            return lhs.value == rhs.value;
-        }
-        friend auto operator!=(RescopedChannel const &lhs, RescopedChannel const &rhs) -> bool {
-            return lhs.value != rhs.value;
-        }
-        explicit operator T() const {
+
+        constexpr operator value_type() const {
             return value;
         }
-        friend auto operator<<(std::ostream &os, RescopedChannel const &rhs) -> std::ostream & {
+
+        friend constexpr auto operator+(RescopedChannel const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = lhs.value + rhs.value;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator-(RescopedChannel const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = lhs.value - rhs.value;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator*(RescopedChannel const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = lhs.value * rhs.value;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator/(RescopedChannel const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = lhs.value / rhs.value;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator+(RescopedChannel const &lhs, value_type const &rhs) {
+            RescopedChannel result = lhs.value + rhs;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator-(RescopedChannel const &lhs, value_type const &rhs) {
+            RescopedChannel result = lhs.value - rhs;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator*(RescopedChannel const &lhs, value_type const &rhs) {
+            RescopedChannel result = lhs.value * rhs;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator/(RescopedChannel const &lhs, value_type const &rhs) {
+            RescopedChannel result = lhs.value / rhs;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator+(value_type const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = lhs + rhs.value;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator-(value_type const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = lhs - rhs.value;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator*(value_type const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = lhs * rhs.value;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+        friend constexpr auto operator/(value_type const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = lhs / rhs.value;
+            if (result.value < Min) {
+                result.value = Min;
+            }
+            if (result.value > Max) {
+                result.value = Max;
+            }
+            return result;
+        }
+
+        constexpr auto operator+=(auto const &rhs) -> RescopedChannel & {
+            return *this = *this + rhs;
+        }
+        constexpr auto operator-=(auto const &rhs) -> RescopedChannel & {
+            return *this = *this - rhs;
+        }
+        constexpr auto operator*=(auto const &rhs) -> RescopedChannel & {
+            return *this = *this * rhs;
+        }
+        constexpr auto operator/=(auto const &rhs) -> RescopedChannel & {
+            return *this = *this / rhs;
+        }
+
+        friend constexpr auto operator<=>(RescopedChannel const &lhs, RescopedChannel const &rhs)
+                -> std::strong_ordering {
+            return lhs.value <=> rhs.value;
+        }
+        friend constexpr auto operator==(RescopedChannel const &lhs, RescopedChannel const &rhs) -> bool {
+            return lhs.value == rhs.value;
+        }
+        friend constexpr auto operator!=(RescopedChannel const &lhs, RescopedChannel const &rhs) -> bool {
+            return lhs.value != rhs.value;
+        }
+
+        friend constexpr auto operator<<(std::ostream &os, RescopedChannel const &rhs) -> std::ostream & {
             os << rhs.value;
             return os;
         }
@@ -1502,7 +1675,7 @@ namespace mgil {
     using UInt32_0255 = RescopedChannel<std::uint32_t, 0, 255>;
     using UInt64_0255 = RescopedChannel<std::uint64_t, 0, 255>;
 
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(IsChannel<Float_01>);
     static_assert(IsChannel<Double_01>);
     static_assert(IsChannel<UInt8_0255>);
@@ -1533,16 +1706,30 @@ namespace mgil {
             return details::find_type_v<typename layout_type::color_space::template NthType<Index>,
                                         typename layout_type::mapped_color_space>;
         }
-        static constexpr auto rescope(channel_type n) -> channel_type {
-            if constexpr (not std::is_fundamental_v<channel_type>) {
-                if (n > ChannelTraits<channel_type>::maxValue()) {
-                    return ChannelTraits<channel_type>::maxValue();
-                }
-                if (n < ChannelTraits<channel_type>::minValue()) {
-                    return ChannelTraits<channel_type>::minValue();
-                }
+
+        static constexpr auto add_sat_if_integral(auto lhs, auto rhs) {
+            if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
+                return std::add_sat(lhs, rhs);
             }
-            return n;
+            return lhs + rhs;
+        }
+        static constexpr auto sub_sat_if_integral(auto lhs, auto rhs) {
+            if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
+                return std::sub_sat(lhs, rhs);
+            }
+            return lhs - rhs;
+        }
+        static constexpr auto mul_sat_if_integral(auto lhs, auto rhs) {
+            if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
+                return std::mul_sat(lhs, rhs);
+            }
+            return lhs * rhs;
+        }
+        static constexpr auto div_sat_if_integral(auto lhs, auto rhs) {
+            if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
+                return std::div_sat(lhs, rhs);
+            }
+            return lhs / rhs;
         }
 
     public:
@@ -1560,18 +1747,12 @@ namespace mgil {
         // Initialize the underlying array by setting all the elements v
         explicit constexpr Pixel(ChannelType v) : _components() {
             _components.fill(v);
-            for (auto &elem: _components) {
-                elem = rescope(elem);
-            }
         }
 
         // Initializing the underlying array by a pack
         template<typename... Ts>
             requires(std::convertible_to<Ts, ChannelType> && ...) and (sizeof...(Ts) == size)
         explicit constexpr Pixel(Ts... components) : _components{static_cast<ChannelType>(components)...} {
-            for (auto &elem: _components) {
-                elem = rescope(elem);
-            }
         }
 
         explicit constexpr Pixel(std::array<ChannelType, size> const &arr) : _components(arr) {
@@ -1584,9 +1765,6 @@ namespace mgil {
             for (auto const elem: std::forward<Range>(range)) {
                 _components[i] = elem;
                 ++i;
-            }
-            for (auto &elem: _components) {
-                elem = rescope(elem);
             }
         }
 
@@ -1629,6 +1807,16 @@ namespace mgil {
             return dst;
         }
 
+        template<typename Channel>
+            requires IsChannel<Channel>
+        constexpr auto castTo() const -> Pixel<Channel, layout_type> {
+            Pixel<Channel, layout_type> result;
+            for (std::size_t i = 0; i < size; i++) {
+                result.get(i) = static_cast<Channel const>(_components[i]);
+            }
+            return result;
+        }
+
         friend constexpr auto operator<=>(Pixel const &lhs, Pixel const &rhs) -> std::strong_ordering {
             return lhs._components <=> rhs._components;
         }
@@ -1642,98 +1830,86 @@ namespace mgil {
         friend constexpr auto operator+(Pixel const &lhs, Pixel const &rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::add_sat(lhs._components[i], rhs._components[i]);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = add_sat_if_integral(lhs._components[i], rhs._components[i]);
             }
             return result;
         }
         friend constexpr auto operator-(Pixel const &lhs, Pixel const &rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::sub_sat(lhs._components[i], rhs._components[i]);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = sub_sat_if_integral(lhs._components[i], rhs._components[i]);
             }
             return result;
         }
         friend constexpr auto operator*(Pixel const &lhs, Pixel const &rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::mul_sat(lhs._components[i], rhs._components[i]);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = mul_sat_if_integral(lhs._components[i], rhs._components[i]);
             }
             return result;
         }
         friend constexpr auto operator/(Pixel const &lhs, Pixel const &rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::div_sat(lhs._components[i], rhs._components[i]);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = div_sat_if_integral(lhs._components[i], rhs._components[i]);
             }
             return result;
         }
 
-        friend constexpr auto operator+(Pixel const &lhs, channel_type rhs) -> Pixel {
+        friend constexpr auto operator+(Pixel const &lhs, std::convertible_to<channel_type> auto rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::add_sat(lhs._components[i], rhs);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = add_sat_if_integral(lhs._components[i], static_cast<channel_type>(rhs));
             }
             return result;
         }
-        friend constexpr auto operator-(Pixel const &lhs, channel_type rhs) -> Pixel {
+        friend constexpr auto operator-(Pixel const &lhs, std::convertible_to<channel_type> auto rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::sub_sat(lhs._components[i], rhs);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = sub_sat_if_integral(lhs._components[i], static_cast<channel_type>(rhs));
             }
             return result;
         }
-        friend constexpr auto operator*(Pixel const &lhs, channel_type rhs) -> Pixel {
+        friend constexpr auto operator*(Pixel const &lhs, std::convertible_to<channel_type> auto rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::mul_sat(lhs._components[i], rhs);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = mul_sat_if_integral(lhs._components[i], static_cast<channel_type>(rhs));
             }
             return result;
         }
-        friend constexpr auto operator/(Pixel const &lhs, channel_type rhs) -> Pixel {
+        friend constexpr auto operator/(Pixel const &lhs, std::convertible_to<channel_type> auto rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::div_sat(lhs._components[i], rhs);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = div_sat_if_integral(lhs._components[i], static_cast<channel_type>(rhs));
             }
             return result;
         }
 
-        friend constexpr auto operator+(channel_type lhs, Pixel const &rhs) -> Pixel {
+        friend constexpr auto operator+(std::convertible_to<channel_type> auto lhs, Pixel const &rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::add_sat(lhs, rhs._components[i]);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = add_sat_if_integral(static_cast<channel_type>(lhs), rhs._components[i]);
             }
             return result;
         }
-        friend constexpr auto operator-(channel_type rhs, Pixel const &lhs) -> Pixel {
+        friend constexpr auto operator-(std::convertible_to<channel_type> auto rhs, Pixel const &lhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::sub_sat(lhs, rhs._components[i]);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = sub_sat_if_integral(static_cast<channel_type>(lhs), rhs._components[i]);
             }
             return result;
         }
-        friend constexpr auto operator*(channel_type lhs, Pixel const &rhs) -> Pixel {
+        friend constexpr auto operator*(std::convertible_to<channel_type> auto lhs, Pixel const &rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::mul_sat(lhs, rhs._components[i]);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = mul_sat_if_integral(static_cast<channel_type>(lhs), rhs._components[i]);
             }
             return result;
         }
-        friend constexpr auto operator/(channel_type lhs, Pixel const &rhs) -> Pixel {
+        friend constexpr auto operator/(std::convertible_to<channel_type> auto lhs, Pixel const &rhs) -> Pixel {
             Pixel result;
             for (std::size_t i = 0; i < size; i++) {
-                result._components[i] = std::div_sat(lhs, rhs._components[i]);
-                result._components[i] = rescope(result._components[i]);
+                result._components[i] = div_sat_if_integral(static_cast<channel_type>(lhs), rhs._components[i]);
             }
             return result;
         }
@@ -2044,7 +2220,7 @@ struct std::formatter<Channel> {
 };
 
 namespace mgil {
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(IsPixel<Pixel<int, rgb_layout_t>>);
     static_assert(IsPixelsConvertible<Pixel<int, abgr_layout_t>, Pixel<int, bgra_layout_t>>);
     static_assert(Pixel<int, rgba_layout_t>(1, 2, 3, 4) ==
@@ -2264,7 +2440,7 @@ struct std::formatter<mgil::Point<ValueType>> {
 };
 
 namespace mgil {
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(IsPoint<Point<int>>);
     static_assert([] {
         constexpr Point point{114, 514};
@@ -2424,7 +2600,7 @@ namespace mgil {
         }
     };
 
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     struct test_deref_adaptor
         : deref_base<test_deref_adaptor, Pixel<int, gray_layout_t>, Pixel<int, gray_layout_t> const,
                      Pixel<int, gray_layout_t> const &, Point<std::ptrdiff_t>, false> {
@@ -2681,7 +2857,7 @@ namespace mgil {
         y_iterator y_pos_;
     };
 
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(IsPixelLocator<position_locator<test_deref_adaptor>>);
     static_assert(IsPixelLocatorHasTransposedType<position_locator<test_deref_adaptor>>);
 
@@ -2888,7 +3064,7 @@ namespace mgil {
         }
     };
 
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(IsImageView<ImageView<position_locator<test_deref_adaptor>>>);
 #endif
 } // namespace mgil
@@ -3274,11 +3450,11 @@ namespace mgil {
         }
     };
 
-    template<typename Range, typename Pixel = details::infer_std_range_over_pixel_t<Range>>
+    template<typename Range, typename Pixel = details::infer_std_range_over_pixel_t<std::remove_cvref_t<Range>>>
     constexpr auto fromRange(Range &&pixels, std::ptrdiff_t width, std::ptrdiff_t height) {
         return FromRangeView<Range, Pixel>{}(std::forward<Range>(pixels), width, height);
     }
-    template<typename Range, typename Pixel = details::infer_std_range_over_pixel_t<Range>>
+    template<typename Range, typename Pixel = details::infer_std_range_over_pixel_t<std::remove_cvref_t<Range>>>
     constexpr auto fromRange(Range &&pixels) {
         return FromRangeView<Range, Pixel>{}(std::forward<Range>(pixels));
     }
@@ -3590,7 +3766,8 @@ namespace mgil {
     };
 
     struct ColorConvertFn : details::image_adaptor_closure_tag {
-        template<typename DstType, typename DstLayout, typename DstPixel = Pixel<DstType, DstLayout>, typename View, typename SrcPixel = typename View::value_type>
+        template<typename DstType, typename DstLayout, typename DstPixel = Pixel<DstType, DstLayout>, typename View,
+                 typename SrcPixel = typename View::value_type>
         constexpr auto operator()(View view, DstType const &type_tag, DstLayout const &layout_tag) const {
             return ColorConvertView<SrcPixel, DstPixel, View>{}(view);
         }
@@ -3862,18 +4039,353 @@ namespace mgil {
         }
     };
 
-#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
     static_assert(IsImageContainer<Image<Pixel<int, rgb_layout_t>>>);
 #endif
 } // namespace mgil
 
 // Image processing algorithms
 namespace mgil {
-    // convolve: Discrete convolution over src_view with kernel_view, returns a owning Image instance
-    // box_blur
-}
+    // convolve
+    template<typename View1, typename View2, typename Image = Image<typename View1::value_type>>
+        requires IsImageView<View1> and IsImageView<View2> and IsImageContainer<Image>
+    constexpr auto convolve(View1 src, View2 kernel) -> Image {
+        std::size_t const kw = kernel.width();
+        std::size_t const kh = kernel.height();
+        std::size_t const w = src.width();
+        std::size_t const h = src.height();
+        std::size_t const padx = kw / 2;
+        std::size_t const pady = kh / 2;
+
+        Image image(w, h);
+
+        using pixel_type = typename View1::value_type;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                Pixel<float, typename View1::value_type::layout_type> sum{};
+                for (std::size_t j = 0; j < kh; ++j) {
+                    for (std::size_t i = 0; i < kw; ++i) {
+                        std::size_t ix = std::clamp<int>(int(x) + int(i) - int(padx), 0, w - 1);
+                        std::size_t iy = std::clamp<int>(int(y) + int(j) - int(pady), 0, h - 1);
+                        auto converted_src = src(ix, iy).template castTo<float>();
+                        auto converted_kernel = kernel(i, j).template castTo<float>();
+                        sum += converted_src * converted_kernel;
+                    }
+                }
+                image[x, y] = sum.template castTo<typename View1::value_type::channel_type>();
+            }
+        }
+
+        return std::move(image);
+    }
+    // boxBlur
+    template<typename View, typename Image = Image<typename View::value_type>>
+        requires IsImageView<View> and IsImageContainer<Image>
+    constexpr auto boxBlur(View src, std::size_t const kw, std::size_t const kh) -> Image {
+        using pixel = Pixel<float, typename View::value_type::layout_type>;
+        pixel kernel_pixel(1.0f / (kw * kh));
+        std::vector data(kw * kh, kernel_pixel);
+        auto kernel = fromRange(data, kw, kh);
+        return std::move(convolve(src, kernel));
+    }
+    // gaussianBlur
+    template<typename View, typename Image = Image<typename View::value_type>>
+        requires IsImageView<View> and IsImageContainer<Image>
+    constexpr auto gaussianBlur(View src, float const sigma) -> Image {
+        int const radius = static_cast<int>(std::ceil(3 * sigma));
+        int const size = 2 * radius + 1;
+        using pixel = Pixel<float, typename View::value_type::layout_type>;
+        std::vector<pixel> data(size * size);
+        float sum = 0.0f;
+        for (int y = -radius; y <= radius; ++y) {
+            for (int x = -radius; x <= radius; ++x) {
+                float val = std::exp(-(x * x + y * y) / (2 * sigma * sigma));
+                pixel kernel_pixel(val);
+                data[(y + radius) * size + (x + radius)] = kernel_pixel;
+                sum += val;
+            }
+        }
+        for (auto &elem: data) {
+            elem /= sum;
+        }
+        auto kernel = fromRange(data, size, size);
+        return std::move(convolve(src, kernel));
+    }
+    // erode, dilate, open, and close
+    template<typename View1, typename View2, typename Comparator, typename Image = Image<typename View1::value_type>>
+        requires IsImageView<View1> and IsImageContainer<Image> and IsImageView<View2> and
+                 std::same_as<typename View2::value_type::channel_type, bool>
+    constexpr auto morphologicalOperation(View1 src, View2 se, Comparator cmp) -> Image {
+        auto const w = src.width();
+        auto const h = src.height();
+        std::size_t const kw = se.width();
+        std::size_t const kh = se.height();
+        auto const padx = kw / 2;
+        auto const pady = kh / 2;
+        Image image(w, h);
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                bool first = true;
+                typename View1::value_type result;
+                for (std::size_t j = 0; j < kh; ++j) {
+                    for (std::size_t i = 0; i < kw; ++i) {
+                        if (not se(i, j)) {
+                            continue;
+                        }
+                        std::size_t const ix = std::clamp<int>(int(x) + int(i) + int(padx), 0, w - 1);
+                        std::size_t const iy = std::clamp<int>(int(y) + int(j) + int(pady), 0, h - 1);
+                        auto val = src(ix, iy);
+                        if (first or cmp(val, result)) {
+                            result = val;
+                            first = false;
+                        }
+                    }
+                }
+                image[x, y] = result;
+            }
+        }
+        return std::move(image);
+    }
+    inline constexpr auto erode = [](auto src, auto se) {
+        return std::move(morphologicalOperation(src, se, [](auto a, auto b) { return a < b; }));
+    };
+    inline constexpr auto dilate = [](auto src, auto se) {
+        return std::move(morphologicalOperation(src, se, [](auto a, auto b) { return a > b; }));
+    };
+    template<typename View1, typename View2, typename Comparator, typename Image = Image<typename View1::value_type>>
+        requires IsImageView<View1> and IsImageContainer<Image> and IsImageView<View2> and
+                 std::same_as<typename View2::value_type::channel_type, bool>
+    constexpr auto open(View1 src, View2 se) {
+        Image temp = erode(src, se);
+        return std::move(dilate(temp.toView(), se));
+    }
+    template<typename View1, typename View2, typename Comparator, typename Image = Image<typename View1::value_type>>
+        requires IsImageView<View1> and IsImageContainer<Image> and IsImageView<View2> and
+                 std::same_as<typename View2::value_type::channel_type, bool>
+    constexpr auto close(View1 src, View2 se) {
+        Image temp = dilate(src, se);
+        return std::move(erode(temp.toView(), se));
+    }
+    // sobel
+    template<typename View, typename Image = Image<typename View::value_type>>
+        requires IsImageView<View> and IsImageContainer<Image>
+    constexpr auto sobel(View src) -> Image {
+        using pixel = Pixel<float, typename View::value_type::layout_type>;
+        constexpr pixel kx[9] = {pixel{-1}, pixel{0},  pixel{1}, pixel{-2}, pixel{0},
+                                 pixel{2},  pixel{-1}, pixel{0}, pixel{1}};
+        constexpr pixel ky[9] = {pixel{-1}, pixel{-2}, pixel{-1}, pixel{0}, pixel{0},
+                                 pixel{0},  pixel{1},  pixel{2},  pixel{1}};
+        auto kernel1 = fromRange(kx, 3, 3);
+        auto kernel2 = fromRange(ky, 3, 3);
+        auto image1 = convolve(src, kernel1);
+        auto image2 = convolve(src, kernel2);
+        Image result(src.width(), src.height());
+        for (std::size_t y = 0; y < src.height(); ++y) {
+            for (std::size_t x = 0; x < src.width(); ++x) {
+                for (std::size_t i = 0; i < pixel::getSize(); ++i) {
+                    result[x, y].get(i) = std::hypot(static_cast<float>(image1[x, y].get(i)),
+                                                     static_cast<float>(image2[x, y].get(i)));
+                }
+            }
+        }
+        return std::move(result);
+    }
+} // namespace mgil
+
+namespace mgil::inline concepts {
+    template<typename T>
+    concept IsImageFileIOClass = requires {
+        typename T::value_type;
+        typename T::image_type;
+
+        requires IsPixel<typename T::value_type>;
+        requires IsImageContainer<typename T::image_type>;
+
+        T::readFile(std::declval<std::filesystem::path>());
+        T::writeFile(std::declval<typename T::image_type::view_type>(), std::declval<std::filesystem::path>());
+    };
+} // namespace mgil::inline concepts
 
 // BMP Image file I/O
-namespace mgil {}
+namespace mgil {
+    // A small helper that automatically calls fclose on scope exit
+    struct FileRAIIHelper {
+        FILE *fp;
+        ~FileRAIIHelper() {
+            if (not fp) {
+                fclose(fp);
+            }
+        }
+    };
+
+    // A simple BMP image file reader/writer, ported from previous project
+    // So far it can only handle the file store in uncompressed 24-bit BGR format
+    // But extending it should be easy
+    template<typename Pixel = Pixel<UInt8_0255, rgb_layout_t>, typename Image = Image<Pixel>>
+    struct BMPFileIO {
+        using value_type = Pixel;
+        using image_type = Image;
+#pragma pack(push, 1)
+        struct BMPFileHeader {
+            std::uint16_t type;
+            std::uint32_t size;
+            std::uint16_t reserved1;
+            std::uint16_t reserved2;
+            std::uint32_t offset;
+        };
+        static_assert(sizeof(BMPFileHeader) == 14, "BMPFileHeader size mismatch");
+
+        struct BMPInfoHeader {
+            std::uint32_t size;
+            std::int32_t width;
+            std::int32_t height;
+            std::uint16_t planes;
+            std::uint16_t bits_count;
+            std::uint32_t compression;
+            std::uint32_t image_size;
+            std::int32_t x_pixels_per_m;
+            std::int32_t y_pixels_per_m;
+            std::uint32_t colors_used;
+            std::uint32_t colors_important;
+        };
+        static_assert(sizeof(BMPInfoHeader) == 40, "BMPInfoHeader size mismatch");
+#pragma pack(pop)
+
+        enum class BMPFileIOError {
+            FILE_NOT_FOUND,
+            NOT_A_FILE,
+            COULD_NOT_OPEN_FILE,
+            FILE_READ_FAILED,
+            FILE_WRITE_FAILED,
+            HEADER_FORMAT_ERROR,
+            FILE_FORMAT_ERROR,
+            INFO_HEADER_ERROR,
+            UNSUPPORTED
+        };
+
+        static_assert(IsLayoutCompatible<typename Pixel::layout_type, rgb_layout_t>,
+                      "Only 24-bit RGB layout compatible formats are supported");
+
+        static auto readFile(std::filesystem::path const &image_path) -> std::expected<Image, BMPFileIOError> {
+            namespace fs = std::filesystem;
+
+            if (not fs::exists(image_path)) {
+                return std::unexpected{BMPFileIOError::FILE_NOT_FOUND};
+            }
+            if (fs::is_directory(image_path)) {
+                return std::unexpected{BMPFileIOError::NOT_A_FILE};
+            }
+
+            FileRAIIHelper file{.fp = fopen(image_path.string().c_str(), "rb")};
+            BMPFileHeader header;
+            BMPInfoHeader info_header;
+            if (not file.fp) {
+                return std::unexpected{BMPFileIOError::COULD_NOT_OPEN_FILE};
+            }
+
+            if (fread(&header, sizeof(BMPFileHeader), 1, file.fp) != 1) {
+                return std::unexpected{BMPFileIOError::FILE_READ_FAILED};
+            }
+            if (header.type != 0x4D42) {
+                return std::unexpected{BMPFileIOError::HEADER_FORMAT_ERROR};
+            }
+            if (fread(&info_header, sizeof(BMPInfoHeader), 1, file.fp) != 1) {
+                return std::unexpected{BMPFileIOError::FILE_READ_FAILED};
+            }
+            if (info_header.bits_count != 24 or info_header.compression != 0) {
+                return std::unexpected{BMPFileIOError::UNSUPPORTED};
+            }
+
+            auto width = info_header.width, height = std::abs(info_header.height);
+            Image image(width, height);
+
+            fseek(file.fp, header.offset, SEEK_SET);
+
+            for (std::size_t y = 0; y < height; ++y) {
+                for (std::size_t x = 0; x < width; ++x) {
+                    std::uint8_t raw_pixel[3];
+                    if (fread(&raw_pixel, 3, 1, file.fp) != 1) {
+                        return std::unexpected{BMPFileIOError::FILE_READ_FAILED};
+                    }
+                    Pixel pixel;
+                    pixel.template get<red_color_t>() = raw_pixel[2];
+                    pixel.template get<green_color_t>() = raw_pixel[1];
+                    pixel.template get<blue_color_t>() = raw_pixel[0];
+                    image[x, y] = pixel;
+                }
+            }
+
+            return image;
+        }
+
+        template<typename View>
+            requires IsImageView<View>
+        static auto writeFile(View view, std::filesystem::path const &image_path)
+                -> std::expected<void, BMPFileIOError> {
+            static_assert(IsLayoutCompatible<typename View::value_type::layout_type, rgb_layout_t>,
+                          "Only 24-bit RGB layout compatible formats are supported");
+            namespace fs = std::filesystem;
+
+            if (fs::is_directory(image_path)) {
+                return std::unexpected{BMPFileIOError::NOT_A_FILE};
+            }
+
+            FileRAIIHelper file{.fp = fopen(image_path.string().c_str(), "wb")};
+            if (not file.fp) {
+                return std::unexpected{BMPFileIOError::COULD_NOT_OPEN_FILE};
+            }
+
+            std::int32_t const width = view.width();
+            std::int32_t const height = view.height();
+            std::uint32_t const file_size = sizeof(BMPFileHeader) + sizeof(BMPInfoHeader) + view.size();
+
+            BMPFileHeader const header = {
+                    .type = 0x4D42, .size = file_size, .offset = sizeof(BMPFileHeader) + sizeof(BMPInfoHeader)};
+            BMPInfoHeader const info_header = {.size = sizeof(BMPInfoHeader),
+                                               .width = width,
+                                               .height = height,
+                                               .planes = 1,
+                                               .bits_count = 24,
+                                               .compression = 0,
+                                               .image_size = file_size,
+                                               .x_pixels_per_m = 0,
+                                               .y_pixels_per_m = 0};
+
+            if (fwrite(&header, sizeof(BMPFileHeader), 1, file.fp) != 1 or
+                fwrite(&info_header, sizeof(BMPInfoHeader), 1, file.fp) != 1) {
+                return std::unexpected{BMPFileIOError::FILE_WRITE_FAILED};
+            }
+
+            for (std::size_t y = 0; y < height; ++y) {
+                for (std::size_t x = 0; x < width; ++x) {
+                    std::uint8_t raw_pixel[3];
+                    raw_pixel[2] = view(x, y).template get<red_color_t>();
+                    raw_pixel[1] = view(x, y).template get<green_color_t>();
+                    raw_pixel[0] = view(x, y).template get<blue_color_t>();
+                    if (fwrite(&raw_pixel, 3, 1, file.fp) != 1) {
+                        return std::unexpected{BMPFileIOError::FILE_WRITE_FAILED};
+                    }
+                }
+            }
+
+            return {};
+        }
+    };
+
+    template<typename FileIO>
+        requires IsImageFileIOClass<FileIO>
+    constexpr auto readImage(std::filesystem::path const &path) {
+        return FileIO::readFile(path);
+    }
+    template<typename FileIO, typename View>
+        requires IsImageView<View> and IsImageFileIOClass<FileIO>
+    constexpr auto writeImage(View view, std::filesystem::path const &path) {
+        return FileIO::writeFile(view, path);
+    }
+
+#ifndef MGIL_NO_COMPILE_TIME_TESTING
+    static_assert(IsImageFileIOClass<BMPFileIO<>>);
+#endif
+} // namespace mgil
 
 #endif // MGIL_H

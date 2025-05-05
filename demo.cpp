@@ -5,10 +5,10 @@
 
 auto main() -> int {
     using namespace mgil;
-    auto view = gradient(4, 4, Pixel<int, rgb_layout_t>(0, 0, 0), Pixel<int, rgb_layout_t>(1, 2, 0),
-                         Pixel<int, rgb_layout_t>(0, 0, 3));
-    std::println("{}", view);
-    auto crop_flipped_view =
-            view | colorConvert(int{}, gray_layout_t{}) | padConstant(2, 1, Pixel<int, gray_layout_t>(-1));
-    std::println("{}", crop_flipped_view);
+    auto image = readImage<BMPFileIO<>>("./test1.bmp");
+    if (not image) {
+        std::println("{}", std::to_underlying(image.error()));
+    }
+    auto blurred_image = gaussianBlur(image.value().toView(), 5.);
+    writeImage<BMPFileIO<>>(blurred_image.toView(), "./sobel.bmp");
 }
