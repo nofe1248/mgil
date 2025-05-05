@@ -1056,18 +1056,16 @@ namespace mgil::inline concepts {
     } and std::equality_comparable<T>;
 
     template<typename T, typename U>
-    concept IsPixelsCompatible =
-            IsPixel<T> and IsPixel<U> and IsChannelsCompatible<typename T::channel_type, typename U::channel_type> and
-            IsLayoutCompatible<typename T::layout_type, typename U::layout_type>;
+    concept IsPixelsCompatible = IsChannelsCompatible<typename T::channel_type, typename U::channel_type> and
+                                 IsLayoutCompatible<typename T::layout_type, typename U::layout_type>;
 
     template<typename T, typename U>
-    concept IsPixelsConvertible = IsPixel<T> and IsPixel<U> and
-                                  (IsChannelsConvertible<typename T::channel_type, typename U::channel_type> or
+    concept IsPixelsConvertible = (IsChannelsConvertible<typename T::channel_type, typename U::channel_type> or
                                    IsChannelsCompatible<typename T::channel_type, typename U::channel_type>) and
                                   IsLayoutCompatible<typename T::layout_type, typename U::layout_type>;
 
     template<typename T, typename U>
-    concept IsPixelsColorConvertible = IsPixel<T> and IsPixel<U> and requires(T src, U dst) {
+    concept IsPixelsColorConvertible = requires(T src, U dst) {
         { PixelTraits<T>::template convertTo<U>(src) } -> std::convertible_to<U>;
     };
 
@@ -1976,7 +1974,7 @@ namespace mgil {
         }
 
         friend auto operator<<(std::ostream &out, Pixel const &pixel) -> std::ostream & {
-            out << std::string{"Pixel{"};
+            out << std::string{"{"};
             if (size > 1) {
                 for (std::size_t i = 0; i < getSize() - 1; i++) {
                     out << pixel.get(i) << ",";
@@ -2194,7 +2192,7 @@ struct std::formatter<mgil::Pixel<Channel, Layout>> {
         return ctx.begin();
     }
     auto format(mgil::Pixel<Channel, Layout> const &pixel, std::format_context &ctx) const {
-        std::format_to(ctx.out(), "Pixel{{");
+        std::format_to(ctx.out(), "{{");
         if (mgil::Pixel<Channel, Layout>::getSize() > 1) {
             for (std::size_t i = 0; i < mgil::Pixel<Channel, Layout>::getSize() - 1; i++) {
                 std::format_to(ctx.out(), "{},", pixel.get(i));
@@ -3108,6 +3106,8 @@ namespace mgil {
 
     public:
         constexpr auto operator()(std::ptrdiff_t width, std::ptrdiff_t height) const -> view_type {
+            assert(width >= 0);
+            assert(height >= 0);
             return view_type(width, height, locator());
         }
     };
@@ -3134,6 +3134,8 @@ namespace mgil {
 
     public:
         constexpr auto operator()(std::ptrdiff_t width, std::ptrdiff_t height, Pixel const &pixel) const -> view_type {
+            assert(width >= 0);
+            assert(height >= 0);
             return view_type(width, height, locator({0, 0}, {1, 1}, IdenticalDeref{.pixel = pixel}));
         }
     };
@@ -3163,6 +3165,8 @@ namespace mgil {
     public:
         constexpr auto operator()(std::ptrdiff_t width, std::ptrdiff_t height, Pixel const &start, Pixel const &step_x,
                                   Pixel const &step_y) const -> view_type {
+            assert(width >= 0);
+            assert(height >= 0);
             return view_type(
                     width, height,
                     locator({0, 0}, {1, 1}, GradientDeref{.start = start, .step_x = step_x, .step_y = step_y}));
@@ -3193,6 +3197,8 @@ namespace mgil {
     public:
         constexpr auto operator()(std::ptrdiff_t width, std::ptrdiff_t height, auto const &generator) const
                 -> view_type {
+            assert(width >= 0);
+            assert(height >= 0);
             return view_type(width, height, locator({0, 0}, {1, 1}, GenerateDeref{.func = generator}));
         }
     };
@@ -3326,6 +3332,10 @@ namespace mgil {
     public:
         constexpr auto operator()(std::ptrdiff_t width, std::ptrdiff_t height, Pixel const &pixel1, Pixel const &pixel2,
                                   std::ptrdiff_t cell_width, std::ptrdiff_t cell_height) const {
+            assert(width >= 0);
+            assert(height >= 0);
+            assert(cell_width <= width and cell_width > 0);
+            assert(cell_height <= height and cell_height > 0);
             return view_type(width, height,
                              locator({0, 0}, {1, 1},
                                      CheckerboardDeref{.pixel1 = pixel1,
@@ -3383,6 +3393,9 @@ namespace mgil {
     public:
         constexpr auto operator()(std::ptrdiff_t width, std::ptrdiff_t height, channel_type min,
                                   channel_type max) const {
+            assert(width >= 0);
+            assert(height >= 0);
+            assert(max >= min);
             return view_type(width, height, locator({0, 0}, {1, 1}, NoiseUniformDeref(max, min)));
         }
     };
@@ -3422,6 +3435,9 @@ namespace mgil {
         constexpr auto operator()(Range &&pixels, std::ptrdiff_t width, std::ptrdiff_t height)
             requires(not std::ranges::range<std::ranges::range_value_t<Range>>)
         {
+            assert(width >= 0);
+            assert(height >= 0);
+            assert(std::ranges::size(pixels) == width * height);
             return view_type(width, height,
                              locator({0, 0}, {1, 1},
                                      FromRangeDeref{.begin = std::ranges::begin(std::forward<Range>(pixels)),
@@ -3476,6 +3492,10 @@ namespace mgil {
     public:
         constexpr auto operator()(View view, std::ptrdiff_t x, std::ptrdiff_t y, std::ptrdiff_t width,
                                   std::ptrdiff_t height) {
+            assert(width >= 0);
+            assert(height >= 0);
+            assert(x + width <= view.width());
+            assert(y + height <= view.height());
             return view_type(width, height, locator({0, 0}, {1, 1}, CropDeref{.view = view, .x = x, .y = y}));
         }
     };
@@ -3805,6 +3825,10 @@ namespace mgil {
 
     public:
         constexpr auto operator()(View view, std::ptrdiff_t result_width, std::ptrdiff_t result_height) const {
+            assert(width >= 0);
+            assert(height >= 0);
+            assert(result_width >= 0);
+            assert(result_height >= 0);
             return view_type(
                     result_width, result_height,
                     locator({0, 0}, {1, 1},
@@ -3853,6 +3877,8 @@ namespace mgil {
 
     public:
         constexpr auto operator()(View view, std::ptrdiff_t pad_x, std::ptrdiff_t pad_y, Pixel const &pad_pixel) const {
+            assert(pad_x >= 0);
+            assert(pad_y >= 0);
             return view_type(
                     view.width() + pad_x * 2, view.height() + pad_y * 2,
                     locator({0, 0}, {1, 1},
@@ -4049,6 +4075,8 @@ namespace mgil {
         std::size_t const h = src.height();
         std::size_t const padx = kw / 2;
         std::size_t const pady = kh / 2;
+        assert(kw <= w);
+        assert(kh <= h);
 
         Image image(w, h);
 
