@@ -3573,7 +3573,7 @@ namespace mgil {
                  IsPixelsColorConvertible<SrcPixel, DstPixel>
     class ColorConvertView {
         struct ColorConvertDeref
-            : deref_base<ColorConvertDeref, SrcPixel, SrcPixel &, SrcPixel const &, DstPixel, false> {
+            : deref_base<ColorConvertDeref, DstPixel, DstPixel &, DstPixel const &, DstPixel, false> {
             View view;
             constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> DstPixel {
                 return PixelTraits<SrcPixel>::template convertTo<DstPixel>(view(pos.x(), pos.y()));
@@ -3596,8 +3596,8 @@ namespace mgil {
         }
 
         template<typename DstType, typename DstLayout>
-        constexpr auto operator()(DstType type_tag, DstLayout layout_tag) const {
-            return details::pipeable{[this, &type_tag, &layout_tag]<typename View>(View view) {
+        constexpr auto operator()(DstType const &type_tag, DstLayout const &layout_tag) const {
+            return details::pipeable{[this, type_tag, layout_tag]<typename View>(View view) {
                 return (*this)(view, type_tag, layout_tag);
             }};
         }
@@ -3656,6 +3656,55 @@ namespace mgil {
     };
 
     inline constexpr auto nearest = NearestFn{};
+
+    // Pad the image with given constant
+    template<typename Pixel, typename View>
+        requires IsPixel<Pixel> and IsImageView<View>
+    class PadConstantView {
+        struct PadConstantDeref : deref_base<PadConstantDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
+            View view;
+            std::ptrdiff_t pad_x;
+            std::ptrdiff_t pad_y;
+            Pixel pad_pixel;
+            constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> Pixel {
+                assert(pos.x() >= 0 and pos.x() < view.width() + pad_x * 2);
+                assert(pos.y() >= 0 and pos.y() < view.height() + pad_y * 2);
+                auto origin_x = pos.x() - pad_x;
+                auto origin_y = pos.y() - pad_y;
+                if (origin_x >= 0 and origin_x < view.width() and origin_y >= 0 and origin_y < view.height()) {
+                    return view(origin_x, origin_y);
+                }
+                return pad_pixel;
+            }
+        };
+        using locator = position_locator<PadConstantDeref>;
+        using point_type = Point<std::ptrdiff_t>;
+        using view_type = ImageView<locator>;
+
+    public:
+        constexpr auto operator()(View view, std::ptrdiff_t pad_x, std::ptrdiff_t pad_y, Pixel const &pad_pixel) const {
+            return view_type(
+                    view.width() + pad_x * 2, view.height() + pad_y * 2,
+                    locator({0, 0}, {1, 1},
+                            PadConstantDeref{.view = view, .pad_x = pad_x, .pad_y = pad_y, .pad_pixel = pad_pixel}));
+        }
+    };
+
+    struct PadConstantFn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view, std::ptrdiff_t pad_x, std::ptrdiff_t pad_y, Pixel const &pad_pixel) const {
+            return PadConstantView<Pixel, View>{}(view, pad_x, pad_y, pad_pixel);
+        }
+
+        template<typename Pixel>
+        constexpr auto operator()(std::ptrdiff_t pad_x, std::ptrdiff_t pad_y, Pixel const &pad_pixel) const {
+            return details::pipeable{[this, pad_x, pad_y, pad_pixel]<typename View>(View view) {
+                return (*this)(view, pad_x, pad_y, pad_pixel);
+            }};
+        }
+    };
+
+    inline constexpr auto padConstant = PadConstantFn{};
 } // namespace mgil
 
 // Image container
@@ -3819,7 +3868,10 @@ namespace mgil {
 } // namespace mgil
 
 // Image processing algorithms
-namespace mgil {}
+namespace mgil {
+    // convolve: Discrete convolution over src_view with kernel_view, returns a owning Image instance
+    // box_blur
+}
 
 // BMP Image file I/O
 namespace mgil {}
