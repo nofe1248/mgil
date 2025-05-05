@@ -489,14 +489,10 @@ namespace mgil::details {
         concept PipeInvocable = requires { std::declval<Rhs>()(std::declval<Lhs>()(std::declval<Image>())); };
 
         template<typename Type>
-            requires(not std::same_as<Type, image_adaptor_closure_tag>)
-        auto isImageAdaptorClosureFunction(Type const &, image_adaptor_closure_tag const &);
-
-        template<typename Type>
-        concept IsImageAdaptorClosure = requires(Type t) { isImageAdaptorClosureFunction(t, t); };
+        concept IsImageAdaptorClosure = std::derived_from<Type, image_adaptor_closure_tag>;
 
         template<typename Adaptor, typename... Args>
-        concept AdaptorInvocable = requires { std::declval<Adaptor>()(std::declval<Args>()...); };
+        concept AdaptorInvocable = requires(Adaptor adaptor) { adaptor(std::declval<Args>()...); };
     } // namespace concepts
 
     template<typename T, typename U>
@@ -538,11 +534,17 @@ namespace mgil::details {
 #endif
     };
 
+    template<typename Fn>
+    struct pipeable : Fn, image_adaptor_closure_tag {
+        constexpr explicit pipeable(Fn &&f) : Fn(std::move(f)) {
+        }
+    };
+
     // img | adaptor is equivalent to adaptor(img)
     template<typename Self, typename Image>
         requires IsImageAdaptorClosure<Self> and AdaptorInvocable<Self, Image>
     constexpr auto operator|(Image &&img, Self &&self) {
-        return std::forward<Self>(self)._rhs(std::forward<Image>(img));
+        return std::forward<Self>(self)(std::forward<Image>(img));
     }
 
     // adaptor1 | adaptor2 is equivalent to adaptor2(adaptor1)
@@ -1330,6 +1332,34 @@ namespace mgil::inline concepts {
     template<typename V1, typename V2>
     concept IsImageViewsCompatible = IsImageView<V1> and IsImageView<V2> and
                                      IsPixelsCompatible<typename V1::value_type, typename V2::value_type>;
+
+    template<typename T>
+    concept IsImageContainer =
+            std::default_initializable<T> and std::copyable<T> and std::movable<T> and std::equality_comparable<T> and
+            requires(T t, T const ct) {
+                typename T::allocator_type;
+                typename T::view_type;
+                typename T::const_view_type;
+                typename T::point_type;
+                typename T::value_type;
+                typename T::x_coordinate_type;
+                typename T::y_coordinate_type;
+
+                requires IsImageView<typename T::view_type>;
+                requires IsImageView<typename T::const_view_type>;
+                requires IsPoint<typename T::point_type>;
+                requires IsPixel<typename T::value_type>;
+
+                {
+                    t[std::declval<typename T::x_coordinate_type>(), std::declval<typename T::y_coordinate_type>()]
+                } -> std::convertible_to<typename T::value_type &>;
+                {
+                    ct[std::declval<typename T::x_coordinate_type>(), std::declval<typename T::y_coordinate_type>()]
+                } -> std::convertible_to<typename T::value_type const &>;
+                { t[std::declval<typename T::point_type>()] } -> std::convertible_to<typename T::value_type &>;
+                { ct[std::declval<typename T::point_type>()] } -> std::convertible_to<typename T::value_type const &>;
+                { ct.toView() } -> std::convertible_to<typename T::view_type>;
+            };
 } // namespace mgil::inline concepts
 
 namespace mgil::details {
@@ -2255,8 +2285,8 @@ namespace mgil {
 namespace mgil {
     // An iterator that remembers its current X and Y position and invokes a function object with it upon dereferencing.
     // Conforms to IsPixelIterator and IsStepIterator concepts
-    template<typename Deref = identity_deref_adaptor<Pixel<int, gray_layout_t>>, bool IsTransposed = false, bool IsVirtual = true,
-             typename PointType = Point<std::ptrdiff_t>>
+    template<typename Deref = identity_deref_adaptor<Pixel<int, gray_layout_t>>, bool IsTransposed = false,
+             bool IsVirtual = true, typename PointType = Point<std::ptrdiff_t>>
         requires IsPoint<PointType> and IsPixelDereferenceAdaptor<Deref>
     struct position_iterator : pixel_iterator_tag,
                                details::iterator_facade<position_iterator<Deref, IsTransposed, IsVirtual, PointType>> {
@@ -2891,7 +2921,7 @@ namespace mgil {
     // Produce a width*height view of zero-initialized pixels
     template<typename Pixel>
         requires IsPixel<Pixel>
-    class EmptyView : public details::image_adaptor_closure_tag {
+    class EmptyView {
         struct EmptyDeref : deref_base<EmptyDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             constexpr auto operator()(Point<std::ptrdiff_t> const &) const -> Pixel {
                 return Pixel{0};
@@ -2916,7 +2946,7 @@ namespace mgil {
     // Produce a width*height view of designated pixel
     template<typename Pixel>
         requires IsPixel<Pixel>
-    class IdenticalView : public details::image_adaptor_closure_tag {
+    class IdenticalView {
         struct IdenticalDeref : deref_base<IdenticalDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             Pixel pixel;
             constexpr auto operator()(Point<std::ptrdiff_t> const &) const -> Pixel {
@@ -2945,7 +2975,7 @@ namespace mgil {
     // Produce a width*height view of a gradient pixel(x,y) = start + x*step_x + y*step_y
     template<typename Pixel>
         requires IsPixel<Pixel>
-    class GradientView : public details::image_adaptor_closure_tag {
+    class GradientView {
         struct GradientDeref : deref_base<GradientDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             Pixel start;
             Pixel step_x;
@@ -2980,7 +3010,7 @@ namespace mgil {
     // Call gen(x, y) to produce a pixel value for each coordinate
     template<typename Pixel>
         requires IsPixel<Pixel>
-    class GenerateView : public details::image_adaptor_closure_tag {
+    class GenerateView {
         struct GenerateDeref : deref_base<GenerateDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             std::function<Pixel(std::ptrdiff_t, std::ptrdiff_t)> func;
             constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> Pixel {
@@ -3007,7 +3037,7 @@ namespace mgil {
     // Tiles a h*w pattern across a larger rows*cols image
     template<typename Pixel, typename View>
         requires IsPixel<Pixel> and IsImageView<View>
-    class PatternView : public details::image_adaptor_closure_tag {
+    class PatternView {
         struct PatternDeref : deref_base<PatternDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View view;
             constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> Pixel {
@@ -3035,7 +3065,7 @@ namespace mgil {
     // Concat two views of equal height side-by-side
     template<typename Pixel, typename View1, typename View2>
         requires IsPixel<Pixel> and IsImageView<View1> and IsImageView<View2> and IsImageViewsCompatible<View1, View2>
-    class ConcatHorizontalView : public details::image_adaptor_closure_tag {
+    class ConcatHorizontalView {
         struct ConcatHorizontalDeref : deref_base<ConcatHorizontalDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View1 view1;
             View2 view2;
@@ -3070,7 +3100,7 @@ namespace mgil {
     // Concat two views of equal height side-by-side
     template<typename Pixel, typename View1, typename View2>
         requires IsPixel<Pixel> and IsImageView<View1> and IsImageView<View2> and IsImageViewsCompatible<View1, View2>
-    class ConcatVerticalView : public details::image_adaptor_closure_tag {
+    class ConcatVerticalView {
         struct ConcatVerticalDeref : deref_base<ConcatVerticalDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View1 view1;
             View2 view2;
@@ -3105,7 +3135,7 @@ namespace mgil {
     // Creates a two-color checkerboard with cell size cw*ch
     template<typename Pixel>
         requires IsPixel<Pixel>
-    class CheckerboardView : public details::image_adaptor_closure_tag {
+    class CheckerboardView {
         struct CheckerboardDeref : deref_base<CheckerboardDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             Pixel pixel1;
             Pixel pixel2;
@@ -3146,7 +3176,7 @@ namespace mgil {
     // Fills an image of size width*height with uniform random pixels using the provided pseudo random generator rng
     template<typename Pixel, typename Gen>
         requires IsPixel<Pixel>
-    class NoiseUniformView : public details::image_adaptor_closure_tag {
+    class NoiseUniformView {
         struct NoiseUniformDeref : deref_base<NoiseUniformDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             std::random_device rd;
             Gen gen{rd()};
@@ -3199,7 +3229,7 @@ namespace mgil {
         requires IsPixel<Pixel> and
                  (std::ranges::sized_range<Range> or
                   (std::ranges::forward_range<Range> and std::ranges::range<std::ranges::range_value_t<Range>>))
-    class FromRangeView : public details::image_adaptor_closure_tag {
+    class FromRangeView {
         struct FromRangeDeref : deref_base<FromRangeDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             std::ranges::iterator_t<Range> begin{};
             std::ranges::iterator_t<Range> end{};
@@ -3259,7 +3289,7 @@ namespace mgil {
     // Lazily projects a rectangular ROI
     template<typename Pixel, typename View>
         requires IsPixel<Pixel> and IsImageView<View>
-    class CropView : public details::image_adaptor_closure_tag {
+    class CropView {
         struct CropDeref : deref_base<CropDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View view;
             std::ptrdiff_t x;
@@ -3281,15 +3311,27 @@ namespace mgil {
         }
     };
 
-    template<typename View, typename Pixel = typename View::value_type>
-    constexpr auto crop(View view, std::ptrdiff_t x, std::ptrdiff_t y, std::ptrdiff_t width, std::ptrdiff_t height) {
-        return CropView<Pixel, View>{}(view, x, y, width, height);
-    }
+    struct CropFn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view, std::ptrdiff_t x, std::ptrdiff_t y, std::ptrdiff_t width,
+                                  std::ptrdiff_t height) const {
+            return CropView<Pixel, View>{}(view, x, y, width, height);
+        }
+
+        constexpr auto operator()(std::ptrdiff_t x, std::ptrdiff_t y, std::ptrdiff_t width,
+                                  std::ptrdiff_t height) const {
+            return details::pipeable{[this, x, y, width, height]<typename View>(View view) {
+                return (*this)(view, x, y, width, height);
+            }};
+        }
+    };
+
+    inline constexpr auto crop = CropFn{};
 
     // Flip the image horizontally
     template<typename Pixel, typename View>
         requires IsPixel<Pixel> and IsImageView<View>
-    class FlipHorizontalView : public details::image_adaptor_closure_tag {
+    class FlipHorizontalView {
         struct FlipHorizontalDeref : deref_base<FlipHorizontalDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View view;
             constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> Pixel {
@@ -3306,15 +3348,23 @@ namespace mgil {
         }
     };
 
-    template<typename View, typename Pixel = typename View::value_type>
-    constexpr auto flipHorizontal(View view) {
-        return FlipHorizontalView<Pixel, View>{}(view);
-    }
+    struct FlipHorizontalFn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view) const {
+            return FlipHorizontalView<Pixel, View>{}(view);
+        }
+
+        constexpr auto operator()() const {
+            return details::pipeable{[this]<typename View>(View view) { return (*this)(view); }};
+        }
+    };
+
+    inline constexpr auto flipHorizontal = FlipHorizontalFn{};
 
     // Flip the image vertically
     template<typename Pixel, typename View>
         requires IsPixel<Pixel> and IsImageView<View>
-    class FlipVerticalView : public details::image_adaptor_closure_tag {
+    class FlipVerticalView {
         struct FlipVerticalDeref : deref_base<FlipVerticalDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View view;
             constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> Pixel {
@@ -3331,15 +3381,23 @@ namespace mgil {
         }
     };
 
-    template<typename View, typename Pixel = typename View::value_type>
-    constexpr auto flipVertical(View view) {
-        return FlipVerticalView<Pixel, View>{}(view);
-    }
+    struct FlipVerticalFn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view) const {
+            return FlipVerticalView<Pixel, View>{}(view);
+        }
+
+        constexpr auto operator()() const {
+            return details::pipeable{[this]<typename View>(View view) { return (*this)(view); }};
+        }
+    };
+
+    inline constexpr auto flipVertical = FlipVerticalFn{};
 
     // Rotate the image by 90 degrees clockwise
     template<typename Pixel, typename View>
         requires IsPixel<Pixel> and IsImageView<View>
-    class Rotate90View : public details::image_adaptor_closure_tag {
+    class Rotate90View {
         struct Rotate90Deref : deref_base<Rotate90Deref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View view;
             constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> Pixel {
@@ -3356,15 +3414,23 @@ namespace mgil {
         }
     };
 
-    template<typename View, typename Pixel = typename View::value_type>
-    constexpr auto rotate90(View view) {
-        return Rotate90View<Pixel, View>{}(view);
-    }
+    struct Rotate90Fn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view) const {
+            return Rotate90View<Pixel, View>{}(view);
+        }
+
+        constexpr auto operator()() const {
+            return details::pipeable{[this]<typename View>(View view) { return (*this)(view); }};
+        }
+    };
+
+    inline constexpr auto rotate90 = Rotate90Fn{};
 
     // Rotate the image by 180 degrees clockwise
     template<typename Pixel, typename View>
         requires IsPixel<Pixel> and IsImageView<View>
-    class Rotate180View : public details::image_adaptor_closure_tag {
+    class Rotate180View {
         struct Rotate180Deref : deref_base<Rotate180Deref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View view;
             constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> Pixel {
@@ -3381,15 +3447,23 @@ namespace mgil {
         }
     };
 
-    template<typename View, typename Pixel = typename View::value_type>
-    constexpr auto rotate180(View view) {
-        return Rotate180View<Pixel, View>{}(view);
-    }
+    struct Rotate180Fn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view) const {
+            return Rotate180View<Pixel, View>{}(view);
+        }
+
+        constexpr auto operator()() const {
+            return details::pipeable{[this]<typename View>(View view) { return (*this)(view); }};
+        }
+    };
+
+    inline constexpr auto rotate180 = Rotate180Fn{};
 
     // Rotate the image by 180 degrees clockwise
     template<typename Pixel, typename View>
         requires IsPixel<Pixel> and IsImageView<View>
-    class Rotate270View : public details::image_adaptor_closure_tag {
+    class Rotate270View {
         struct Rotate270Deref : deref_base<Rotate270Deref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View view;
             constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> Pixel {
@@ -3406,23 +3480,32 @@ namespace mgil {
         }
     };
 
-    template<typename View, typename Pixel = typename View::value_type>
-    constexpr auto rotate270(View view) {
-        return Rotate270View<Pixel, View>{}(view);
-    }
+    struct Rotate270Fn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view) const {
+            return Rotate270View<Pixel, View>{}(view);
+        }
+
+        constexpr auto operator()() const {
+            return details::pipeable{[this]<typename View>(View view) { return (*this)(view); }};
+        }
+    };
+
+    inline constexpr auto rotate270 = Rotate270Fn{};
 
     // Extracts a single channel as a grayscale view
-    template<typename Pixel_, typename View, std::size_t Index>
-        requires IsPixel<Pixel_> and IsImageView<View> and (Index < Pixel_::getSize())
-    class ChannelExtractByIndexView : public details::image_adaptor_closure_tag {
+    template<typename Pixel_, typename View>
+        requires IsPixel<Pixel_> and IsImageView<View>
+    class ChannelExtractByIndexView {
     protected:
         using channel_type = typename Pixel_::channel_type;
         using result_pixel_type = Pixel<channel_type, gray_layout_t>;
         struct ChannelExtractDeref : deref_base<ChannelExtractDeref, result_pixel_type, result_pixel_type &,
                                                 result_pixel_type const &, result_pixel_type, false> {
             View view;
+            std::size_t index;
             constexpr auto operator()(Point<std::ptrdiff_t> const &pos) const -> result_pixel_type {
-                return result_pixel_type(view(pos.x(), pos.y()).template get<Index>());
+                return result_pixel_type(view(pos.x(), pos.y()).get(index));
             }
         };
         using locator = position_locator<ChannelExtractDeref>;
@@ -3430,33 +3513,29 @@ namespace mgil {
         using view_type = ImageView<locator>;
 
     public:
-        constexpr auto operator()(View view) {
-            return view_type(view.height(), view.width(), locator({0, 0}, {1, 1}, ChannelExtractDeref{.view = view}));
+        constexpr auto operator()(View view, std::size_t const index) {
+            return view_type(view.height(), view.width(),
+                             locator({0, 0}, {1, 1}, ChannelExtractDeref{.view = view, .index = index}));
         }
     };
 
+    struct ChannelExtractByIndexFn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view, std::size_t const index) const {
+            return ChannelExtractByIndexView<Pixel, View>{}(view, index);
+        }
 
-    template<std::size_t Index, typename View, typename Pixel = typename View::value_type>
-    constexpr auto channelExtractByIndex(View view) {
-        return ChannelExtractByIndexView<Pixel, View, Index>{}(view);
-    }
+        constexpr auto operator()(std::size_t const index) const {
+            return details::pipeable{[this, index]<typename View>(View view) { return (*this)(view, index); }};
+        }
+    };
 
-    template<typename Pixel, typename View, typename Channel>
-        requires IsPixel<Pixel> and IsImageView<View> and IsColorSpaceComponent<Channel> and
-                 details::contain_type_v<Channel, typename Pixel::layout_type::color_space>
-    class ChannelExtractByTypeView
-        : public ChannelExtractByIndexView<Pixel, View,
-                                           details::find_type_v<Channel, typename Pixel::layout_type::color_space>> {};
-
-    template<typename Channel, typename View, typename Pixel = typename View::value_type>
-    constexpr auto channelExtractByType(View view) {
-        return ChannelExtractByTypeView<Pixel, View, Channel>{}(view);
-    }
+    inline constexpr auto channelExtractByIndex = ChannelExtractByIndexFn{};
 
     // Transform pixels by calling a function on them
     template<typename Pixel, typename View>
         requires IsPixel<Pixel> and IsImageView<View>
-    class TransformView : public details::image_adaptor_closure_tag {
+    class TransformView {
         struct TransformDeref : deref_base<TransformDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             std::function<Pixel(Pixel const &)> func;
             View view;
@@ -3475,16 +3554,24 @@ namespace mgil {
         }
     };
 
-    template<typename Func, typename View, typename Pixel = typename View::value_type>
-    constexpr auto transform(View view, Func func) {
-        return TransformView<Pixel, View>{}(view, func);
-    }
+    struct TransformFn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view, auto const &func) const {
+            return TransformView<Pixel, View>{}(view, func);
+        }
+
+        constexpr auto operator()(auto const &func) const {
+            return details::pipeable{[this, func]<typename View>(View view) { return (*this)(view, func); }};
+        }
+    };
+
+    inline constexpr auto transform = TransformFn{};
 
     // Convert color space layouts
     template<typename SrcPixel, typename DstPixel, typename View>
         requires IsPixel<SrcPixel> and IsPixel<DstPixel> and IsImageView<View> and
                  IsPixelsColorConvertible<SrcPixel, DstPixel>
-    class ColorConvertView : public details::image_adaptor_closure_tag {
+    class ColorConvertView {
         struct ColorConvertDeref
             : deref_base<ColorConvertDeref, SrcPixel, SrcPixel &, SrcPixel const &, DstPixel, false> {
             View view;
@@ -3502,15 +3589,26 @@ namespace mgil {
         }
     };
 
-    template<typename DstPixel, typename View, typename SrcPixel = typename View::value_type>
-    constexpr auto colorConvert(View view) {
-        return ColorConvertView<SrcPixel, DstPixel, View>{}(view);
-    }
+    struct ColorConvertFn : details::image_adaptor_closure_tag {
+        template<typename DstType, typename DstLayout, typename DstPixel = Pixel<DstType, DstLayout>, typename View, typename SrcPixel = typename View::value_type>
+        constexpr auto operator()(View view, DstType const &type_tag, DstLayout const &layout_tag) const {
+            return ColorConvertView<SrcPixel, DstPixel, View>{}(view);
+        }
+
+        template<typename DstType, typename DstLayout>
+        constexpr auto operator()(DstType type_tag, DstLayout layout_tag) const {
+            return details::pipeable{[this, &type_tag, &layout_tag]<typename View>(View view) {
+                return (*this)(view, type_tag, layout_tag);
+            }};
+        }
+    };
+
+    inline constexpr auto colorConvert = ColorConvertFn{};
 
     // Subsample the image using the nearest neighbor interpolation
     template<typename Pixel, typename View>
         requires IsPixel<Pixel> and IsImageView<View>
-    class NearestView : public details::image_adaptor_closure_tag {
+    class NearestView {
         struct NearestDeref : deref_base<NearestDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
             View view;
             std::ptrdiff_t result_width;
@@ -3544,10 +3642,20 @@ namespace mgil {
         }
     };
 
-    template<typename View, typename Pixel = typename View::value_type>
-    constexpr auto nearest(View view, std::ptrdiff_t result_width, std::ptrdiff_t result_height) {
-        return NearestView<Pixel, View>{}(view, result_width, result_height);
-    }
+    struct NearestFn : details::image_adaptor_closure_tag {
+        template<typename View, typename Pixel = typename View::value_type>
+        constexpr auto operator()(View view, std::ptrdiff_t result_width, std::ptrdiff_t result_height) const {
+            return NearestView<Pixel, View>{}(view, result_width, result_height);
+        }
+
+        constexpr auto operator()(std::ptrdiff_t result_width, std::ptrdiff_t result_height) const {
+            return details::pipeable{[this, result_width, result_height]<typename View>(View view) {
+                return (*this)(view, result_width, result_height);
+            }};
+        }
+    };
+
+    inline constexpr auto nearest = NearestFn{};
 } // namespace mgil
 
 // Image container
@@ -3683,6 +3791,10 @@ namespace mgil {
             return *this;
         }
 
+        constexpr auto operator==(Image const &that) const noexcept -> bool {
+            return data_ == that.data_ and width_ == that.width_ && height_ == that.height_;
+        }
+
         constexpr auto operator[](x_coordinate_type x, y_coordinate_type y) const -> Pixel const & {
             return interface_[x, y];
         }
@@ -3700,9 +3812,16 @@ namespace mgil {
             return view_type(width_, height_, locator({0, 0}, {1, 1}, {}, width_, height_, data_));
         }
     };
+
+#ifndef IMAGE_PROCESSING_NO_COMPILE_TIME_TESTING
+    static_assert(IsImageContainer<Image<Pixel<int, rgb_layout_t>>>);
+#endif
 } // namespace mgil
 
 // Image processing algorithms
+namespace mgil {}
+
+// BMP Image file I/O
 namespace mgil {}
 
 #endif // MGIL_H
