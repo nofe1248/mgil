@@ -1,8 +1,8 @@
 #include "mgil.hpp"
 
+#include <algorithm>
 #include <print>
 #include <vector>
-#include <algorithm>
 
 auto demo1() -> void {
     using namespace mgil;
@@ -21,15 +21,15 @@ auto demo1() -> void {
     // The MGIL view adaptors can be chained together using the pipe operator "|"
     // Just like the C++ Ranges library!
     // Read adaptor1 | adaptor 2 as adaptor2(adaptor1)
-    auto processed_view = gradient_view
-                    | crop(2, 2, 4, 4)  // Crop the view at (2, 2) with cropped view width = 4, height = 4
-                    | rotate90()        // Rotate the view by 90 degrees clockwise
-                    | flipVertical()    // Flip the view vertically
-                    | transform([](pixel input) {
-                          input.get<red_color_t>() = 0;     // Make red channel all zero
-                          input.get<green_color_t>() *= 2;  // Amplify the green channel by factor of 2
-                          return input;
-                      });
+    auto processed_view = gradient_view |
+                          crop(2, 2, 4, 4) // Crop the view at (2, 2) with cropped view width = 4, height = 4
+                          | rotate90() // Rotate the view by 90 degrees clockwise
+                          | flipVertical() // Flip the view vertically
+                          | transform([](pixel input) {
+                                input.get<red_color_t>() = 0; // Make red channel all zero
+                                input.get<green_color_t>() *= 2; // Amplify the green channel by factor of 2
+                                return input;
+                            });
 
     // Print out the view to see what happened!
     std::println("{}", processed_view);
@@ -57,17 +57,16 @@ auto demo2() -> void {
     using gray_pixel = Pixel<int, gray_layout_t>;
     // from either a one-dimensional range with width and height specified...
     std::vector pixels1 = {
-        gray_pixel{1}, gray_pixel{2}, gray_pixel{3},
-        gray_pixel{4}, gray_pixel{5}, gray_pixel{6},
-        gray_pixel{7}, gray_pixel{8}, gray_pixel{9},
+            gray_pixel{1}, gray_pixel{2}, gray_pixel{3}, gray_pixel{4}, gray_pixel{5},
+            gray_pixel{6}, gray_pixel{7}, gray_pixel{8}, gray_pixel{9},
     };
     auto from_range_view_1 = fromRange(pixels1, 3, 3);
     std::println("from_range_view_1: {}", from_range_view_1);
     // or a two-dimensional nested range
     std::vector pixels2 = {
-        std::vector{gray_pixel{1}, gray_pixel{2}, gray_pixel{3}},
-        std::vector{gray_pixel{4}, gray_pixel{5}, gray_pixel{6}},
-        std::vector{gray_pixel{7}, gray_pixel{8}, gray_pixel{9}},
+            std::vector{gray_pixel{1}, gray_pixel{2}, gray_pixel{3}},
+            std::vector{gray_pixel{4}, gray_pixel{5}, gray_pixel{6}},
+            std::vector{gray_pixel{7}, gray_pixel{8}, gray_pixel{9}},
     };
     auto from_range_view_2 = fromRange(pixels2);
     std::println("from_range_view_2: {}", from_range_view_2);
@@ -88,8 +87,7 @@ auto demo3() -> void {
     // Handle possible exceptions using C++23 std::expected
     if (not image.has_value()) {
         // The error code is provided by a enum class
-        std::println("Failed to read image with error code {}",
-            std::to_underlying(image.error()));
+        std::println("Failed to read image with error code {}", std::to_underlying(image.error()));
         return;
     }
 
@@ -99,25 +97,23 @@ auto demo3() -> void {
     // by the .toView() function
     auto width = image.value().toView().width() / 2;
     auto height = image.value().toView().height() / 2;
-    auto processed_view_1 = image.value().toView()
-        | rotate180()   // rotate the image by 180 degrees clockwise
-        | transform([](auto pixel) {
-            pixel.template get<red_color_t>() = 0;
-            pixel.template get<green_color_t>() = 0;
-            // extracts the blue channel by setting other two all zero
-            return pixel;
-        })
-        | nearest(width, height);   // subsample the image by nearest linear interpolation
+    auto processed_view_1 = image.value().toView() | rotate180() // rotate the image by 180 degrees clockwise
+                            | transform([](auto pixel) {
+                                  pixel.template get<red_color_t>() = 0;
+                                  pixel.template get<green_color_t>() = 0;
+                                  // extracts the blue channel by setting other two all zero
+                                  return pixel;
+                              }) |
+                            nearest(width, height); // subsample the image by nearest linear interpolation
 
-    auto processed_view_2 = image.value().toView()
-        | flipVertical()    // flip the image vertically
-        | transform([](auto pixel) {
-            pixel.template get<red_color_t>() = 0;
-            pixel.template get<blue_color_t>() = 0;
-            // extracts the green channel by setting other two all zero
-            return pixel;
-        })
-        | nearest(width, height);   // subsample the image by nearest linear interpolation
+    auto processed_view_2 = image.value().toView() | flipVertical() // flip the image vertically
+                            | transform([](auto pixel) {
+                                  pixel.template get<red_color_t>() = 0;
+                                  pixel.template get<blue_color_t>() = 0;
+                                  // extracts the green channel by setting other two all zero
+                                  return pixel;
+                              }) |
+                            nearest(width, height); // subsample the image by nearest linear interpolation
 
     // concat the two image views vertically
     auto final_processed_view = concatVertical(processed_view_1, processed_view_2);
@@ -133,9 +129,8 @@ auto demo4() -> void {
 
     // Handle possible exceptions using C++23 std::expected
     if (not image.has_value()) {
-        // The error code is provided by a enum class
-        std::println("Failed to read image with error code {}",
-            std::to_underlying(image.error()));
+        // The error code is provided by an enum class
+        std::println("Failed to read image with error code {}", std::to_underlying(image.error()));
         return;
     }
 
@@ -155,15 +150,73 @@ auto demo5() -> void {
     });
     // Transform it
     auto transformed_view = view | transform([](auto pixel) {
-        std::println("transform({})", pixel);
-        return pixel;
-    });
+                                std::println("transform({})", pixel);
+                                return pixel;
+                            });
     // Traverse it
-    for (auto const &pixel : transformed_view) {
+    for (auto const &pixel: transformed_view) {
         std::println("Loop: {}", pixel);
     }
 }
 
+template<typename Pixel, typename View1, typename View2>
+    requires mgil::IsPixel<Pixel> and mgil::IsImageView<View1> and mgil::IsImageView<View2> and
+             mgil::IsImageViewsCompatible<View1, View2>
+class BlendingView {
+    struct BlendingDeref : mgil::deref_base<BlendingDeref, Pixel, Pixel &, Pixel const &, Pixel, false> {
+        View1 view1;
+        View2 view2;
+        constexpr auto operator()(mgil::Point<std::ptrdiff_t> const &pos) const -> Pixel {
+            // When being dereferenced, return pixel generated by averaging two pixels from the same location in two
+            // views
+            return view1(pos) / typename View1::value_type::channel_type(2) + view2(pos) / typename View1::value_type::channel_type(2);
+        }
+    };
+    using locator = mgil::position_locator<BlendingDeref>;
+    using point_type = mgil::Point<std::ptrdiff_t>;
+    using view_type = mgil::ImageView<locator>;
+
+public:
+    constexpr auto operator()(View1 view1, View2 view2) const {
+        assert(view1.width() == view2.width());
+        assert(view1.height() == view2.height());
+        return view_type(view1.width(), view1.height(),
+                         locator({0, 0}, {1, 1}, BlendingDeref{.view1 = view1, .view2 = view2}));
+    }
+};
+
+template<typename View1, typename View2, typename Pixel = typename View1::value_type>
+    requires mgil::IsPixel<Pixel> and mgil::IsImageView<View1> and mgil::IsImageView<View2> and
+             mgil::IsImageViewsCompatible<View1, View2>
+constexpr auto blending(View1 view1, View2 view2) {
+    return BlendingView<Pixel, View1, View2>{}(view1, view2);
+}
+
+auto demo6() -> void {
+    using namespace mgil;
+
+    auto image1 = readImage<BMPFileIO<>>("./demo6_1.bmp");
+    auto image2 = readImage<BMPFileIO<>>("./demo6_2.bmp");
+
+    // Handle possible exceptions using C++23 std::expected
+    if (not image1.has_value()) {
+        // The error code is provided by an enum class
+        std::println("Failed to read image with error code {}", std::to_underlying(image1.error()));
+        return;
+    }
+    if (not image2.has_value()) {
+        // The error code is provided by an enum class
+        std::println("Failed to read image with error code {}", std::to_underlying(image2.error()));
+        return;
+    }
+
+    // Try our customized image view factory!.
+    auto blended_image = blending(image1.value().toView(), image2.value().toView());
+
+    // then we can write the view to file，
+    writeImage<BMPFileIO<>>(blended_image, "./demo6_result.bmp");
+}
+
 auto main() -> int {
-    demo5();
+    demo6();
 }

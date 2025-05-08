@@ -1435,6 +1435,33 @@ namespace mgil {
     template<IsChannel T, typename ChannelTraits<T>::value_type Min, typename ChannelTraits<T>::value_type Max>
         requires std::integral<T> or std::floating_point<T>
     struct RescopedChannel<T, Min, Max> : channel_tag {
+    private:
+        static constexpr auto add_sat_if_integral(auto lhs, auto rhs) {
+            if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
+                return std::add_sat(lhs, rhs);
+            }
+            return static_cast<T>(lhs + rhs);
+        }
+        static constexpr auto sub_sat_if_integral(auto lhs, auto rhs) {
+            if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
+                return std::sub_sat(lhs, rhs);
+            }
+            return static_cast<T>(lhs - rhs);
+        }
+        static constexpr auto mul_sat_if_integral(auto lhs, auto rhs) {
+            if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
+                return std::mul_sat(lhs, rhs);
+            }
+            return static_cast<T>(lhs * rhs);
+        }
+        static constexpr auto div_sat_if_integral(auto lhs, auto rhs) {
+            if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
+                return std::div_sat(lhs, rhs);
+            }
+            return static_cast<T>(lhs / rhs);
+        }
+
+    public:
         T value;
 
         using value_type = T;
@@ -1498,7 +1525,7 @@ namespace mgil {
         }
 
         friend constexpr auto operator+(RescopedChannel const &lhs, RescopedChannel const &rhs) {
-            RescopedChannel result = lhs.value + rhs.value;
+            RescopedChannel result(static_cast<value_type>(add_sat_if_integral(lhs.value, rhs.value)));
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1508,7 +1535,7 @@ namespace mgil {
             return result;
         }
         friend constexpr auto operator-(RescopedChannel const &lhs, RescopedChannel const &rhs) {
-            RescopedChannel result = lhs.value - rhs.value;
+            RescopedChannel result(static_cast<value_type>(sub_sat_if_integral(lhs.value, rhs.value)));
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1518,7 +1545,7 @@ namespace mgil {
             return result;
         }
         friend constexpr auto operator*(RescopedChannel const &lhs, RescopedChannel const &rhs) {
-            RescopedChannel result = lhs.value * rhs.value;
+            RescopedChannel result(static_cast<value_type>(mul_sat_if_integral(lhs.value, rhs.value)));
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1528,7 +1555,7 @@ namespace mgil {
             return result;
         }
         friend constexpr auto operator/(RescopedChannel const &lhs, RescopedChannel const &rhs) {
-            RescopedChannel result = lhs.value / rhs.value;
+            RescopedChannel result(static_cast<value_type>(div_sat_if_integral(lhs.value, rhs.value)));
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1537,8 +1564,10 @@ namespace mgil {
             }
             return result;
         }
-        friend constexpr auto operator+(RescopedChannel const &lhs, value_type const &rhs) {
-            RescopedChannel result = lhs.value + rhs;
+        template<typename U>
+            requires std::convertible_to<U, value_type>
+        friend constexpr auto operator+(RescopedChannel const &lhs, U const &rhs) {
+            RescopedChannel result = add_sat_if_integral(lhs.value, static_cast<value_type>(rhs));
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1547,8 +1576,10 @@ namespace mgil {
             }
             return result;
         }
-        friend constexpr auto operator-(RescopedChannel const &lhs, value_type const &rhs) {
-            RescopedChannel result = lhs.value - rhs;
+        template<typename U>
+            requires std::convertible_to<U, value_type>
+        friend constexpr auto operator-(RescopedChannel const &lhs, U const &rhs) {
+            RescopedChannel result = sub_sat_if_integral(lhs.value, static_cast<value_type>(rhs));
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1557,8 +1588,10 @@ namespace mgil {
             }
             return result;
         }
-        friend constexpr auto operator*(RescopedChannel const &lhs, value_type const &rhs) {
-            RescopedChannel result = lhs.value * rhs;
+        template<typename U>
+            requires std::convertible_to<U, value_type>
+        friend constexpr auto operator*(RescopedChannel const &lhs, U const &rhs) {
+            RescopedChannel result = mul_sat_if_integral(lhs.value, static_cast<value_type>(rhs));
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1567,8 +1600,10 @@ namespace mgil {
             }
             return result;
         }
-        friend constexpr auto operator/(RescopedChannel const &lhs, value_type const &rhs) {
-            RescopedChannel result = lhs.value / rhs;
+        template<typename U>
+            requires std::convertible_to<U, value_type>
+        friend constexpr auto operator/(RescopedChannel const &lhs, U const &rhs) {
+            RescopedChannel result = div_sat_if_integral(lhs.value, static_cast<value_type>(rhs));
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1577,8 +1612,10 @@ namespace mgil {
             }
             return result;
         }
-        friend constexpr auto operator+(value_type const &lhs, RescopedChannel const &rhs) {
-            RescopedChannel result = lhs + rhs.value;
+        template<typename U>
+            requires std::convertible_to<U, value_type>
+        friend constexpr auto operator+(U const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = add_sat_if_integral(static_cast<value_type>(lhs), rhs.value);
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1587,8 +1624,10 @@ namespace mgil {
             }
             return result;
         }
-        friend constexpr auto operator-(value_type const &lhs, RescopedChannel const &rhs) {
-            RescopedChannel result = lhs - rhs.value;
+        template<typename U>
+            requires std::convertible_to<U, value_type>
+        friend constexpr auto operator-(U const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = sub_sat_if_integral(static_cast<value_type>(lhs), rhs.value);
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1597,8 +1636,10 @@ namespace mgil {
             }
             return result;
         }
-        friend constexpr auto operator*(value_type const &lhs, RescopedChannel const &rhs) {
-            RescopedChannel result = lhs * rhs.value;
+        template<typename U>
+            requires std::convertible_to<U, value_type>
+        friend constexpr auto operator*(U const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = mul_sat_if_integral(static_cast<value_type>(lhs), rhs.value);
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1607,8 +1648,10 @@ namespace mgil {
             }
             return result;
         }
-        friend constexpr auto operator/(value_type const &lhs, RescopedChannel const &rhs) {
-            RescopedChannel result = lhs / rhs.value;
+        template<typename U>
+            requires std::convertible_to<U, value_type>
+        friend constexpr auto operator/(U const &lhs, RescopedChannel const &rhs) {
+            RescopedChannel result = div_sat_if_integral(static_cast<value_type>(lhs), rhs.value);
             if (result.value < Min) {
                 result.value = Min;
             }
@@ -1708,25 +1751,25 @@ namespace mgil {
             if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
                 return std::add_sat(lhs, rhs);
             }
-            return lhs + rhs;
+            return static_cast<decltype(lhs)>(lhs + rhs);
         }
         static constexpr auto sub_sat_if_integral(auto lhs, auto rhs) {
             if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
                 return std::sub_sat(lhs, rhs);
             }
-            return lhs - rhs;
+            return static_cast<decltype(lhs)>(lhs - rhs);
         }
         static constexpr auto mul_sat_if_integral(auto lhs, auto rhs) {
             if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
                 return std::mul_sat(lhs, rhs);
             }
-            return lhs * rhs;
+            return static_cast<decltype(lhs)>(lhs * rhs);
         }
         static constexpr auto div_sat_if_integral(auto lhs, auto rhs) {
             if constexpr (std::integral<decltype(lhs)> and std::integral<decltype(rhs)>) {
                 return std::div_sat(lhs, rhs);
             }
-            return lhs / rhs;
+            return static_cast<decltype(lhs)>(lhs / rhs);
         }
 
     public:
@@ -3825,8 +3868,6 @@ namespace mgil {
 
     public:
         constexpr auto operator()(View view, std::ptrdiff_t result_width, std::ptrdiff_t result_height) const {
-            assert(width >= 0);
-            assert(height >= 0);
             assert(result_width >= 0);
             assert(result_height >= 0);
             return view_type(
@@ -4102,11 +4143,11 @@ namespace mgil {
     // boxBlur
     template<typename View, typename Image = Image<typename View::value_type>>
         requires IsImageView<View> and IsImageContainer<Image>
-    constexpr auto boxBlur(View src, std::size_t const kw, std::size_t const kh) -> Image {
+    constexpr auto boxBlur(View src, std::size_t const radius) -> Image {
         using pixel = Pixel<float, typename View::value_type::layout_type>;
-        pixel kernel_pixel(1.0f / (kw * kh));
-        std::vector data(kw * kh, kernel_pixel);
-        auto kernel = fromRange(data, kw, kh);
+        pixel kernel_pixel(1.0f / (radius * radius));
+        std::vector data(radius * radius, kernel_pixel);
+        auto kernel = fromRange(data, radius, radius);
         return std::move(convolve(src, kernel));
     }
     // gaussianBlur
