@@ -6,5 +6,5 @@ set(CMAKE_CXX_STANDARD 26)
 
 add_executable(demo demo.cpp)
 
-target_compile_options(demo PRIVATE -stdlib=libc++ -ftemplate-backtrace-limit=0)
-target_link_libraries(demo PRIVATE "C:/msys64/ucrt64/lib/libc++.a")
+target_compile_options(demo PRIVATE -stdlib=libc++)
+target_link_libraries(demo PRIVATE -lc++)
